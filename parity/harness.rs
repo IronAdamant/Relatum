@@ -900,14 +900,16 @@ fn arg(json_text: &str) -> Value {
 }
 
 /// Relatum's intentional MCP output changes, folded on both sides:
-/// relatum_edit is dropped from tools/list; relatum_ls's opt-in limit,
-/// since, and details arguments are dropped from
-/// its input schema; tool descriptions are compared after docstring dedent
-/// (Python 3.13 does that at compile time; 3.12 keeps the indentation);
+/// relatum_edit is dropped from tools/list; Relatum's opt-in arguments
+/// (relatum_ls's limit, since, and details, relatum_get's
+/// include_superseded) are dropped from the input schemas; tool and argument
+/// descriptions and `maxLength` are dropped, because Relatum writes its own
+/// (1.4.0: when to use each tool, and the 200-character summary limit);
 /// argument validation errors are compared by shape (see fold_validation);
 /// and a tool result's JSON text is compared as data, because Relatum
 /// writes it compact where Examen indented it. `structuredContent` is still
-/// compared as-is.
+/// compared as-is. Names, titles, types, defaults, and required lists are
+/// still compared.
 fn fold_intentional(responses: &mut [Value]) {
     for entry in responses.iter_mut() {
         let Value::Array(pair) = entry else { continue };
@@ -917,14 +919,22 @@ fn fold_intentional(responses: &mut [Value]) {
             // relatum_edit has no Examen counterpart.
             tools.retain(|tool| !matches!(tool.get("name"), Some(Value::String(name)) if name.ends_with("_edit")));
             for tool in tools.iter_mut() {
-                if let Some(Value::String(text)) = member(tool, "description") {
-                    *text = dedent_doc(text);
+                let name = match member(tool, "name") {
+                    Some(Value::String(name)) => name.clone(),
+                    _ => String::new(),
+                };
+                if let Value::Object(pairs) = tool {
+                    pairs.retain(|(key, _)| key != "description");
                 }
-                let is_ls = matches!(member(tool, "name"), Some(Value::String(name)) if name.ends_with("_ls"));
-                if is_ls {
-                    let properties = member(tool, "inputSchema").and_then(|schema| member(schema, "properties"));
-                    if let Some(Value::Object(pairs)) = properties {
-                        pairs.retain(|(key, _)| !RELATUM_LS_ARGS.contains(&key.as_str()));
+                let properties = member(tool, "inputSchema").and_then(|schema| member(schema, "properties"));
+                if let Some(Value::Object(pairs)) = properties {
+                    pairs.retain(|(key, _)| {
+                        !RELATUM_ARGS.iter().any(|(tool, arg)| name.ends_with(tool) && key == arg)
+                    });
+                    for (_, property) in pairs.iter_mut() {
+                        if let Value::Object(fields) = property {
+                            fields.retain(|(key, _)| key != "description" && key != "maxLength");
+                        }
                     }
                 }
             }
@@ -968,43 +978,19 @@ fn fold_validation(text: &str) -> Option<String> {
     (pydantic || relatum).then(|| format!("Error executing tool {tool}: <argument validation error>"))
 }
 
-/// Opt-in relatum_ls arguments Examen does not have.
-const RELATUM_LS_ARGS: [&str; 3] = ["limit", "since", "details"];
+/// Opt-in arguments Examen does not have, as (tool suffix, argument).
+const RELATUM_ARGS: [(&str, &str); 4] = [
+    ("_ls", "limit"),
+    ("_ls", "since"),
+    ("_ls", "details"),
+    ("_get", "include_superseded"),
+];
 
 fn member<'a>(value: &'a mut Value, key: &str) -> Option<&'a mut Value> {
     match value {
         Value::Object(pairs) => pairs.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v),
         _ => None,
     }
-}
-
-/// CPython 3.13's compile-time docstring cleanup: strip the first line's
-/// leading whitespace, remove the common indentation of the other lines,
-/// and empty whitespace-only lines.
-fn dedent_doc(text: &str) -> String {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let indent = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
-    let margin = lines
-        .iter()
-        .skip(1)
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| indent(line))
-        .min()
-        .unwrap_or(0);
-    lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            if i == 0 {
-                line.trim_start_matches([' ', '\t']).to_string()
-            } else if line.trim().is_empty() {
-                String::new()
-            } else {
-                line[margin.min(indent(line))..].to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn mcp_suite(python: &str, legacy: &Path, binary_mcp: &Path, diffs: &mut Diffs) {

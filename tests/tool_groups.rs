@@ -94,11 +94,11 @@ const ALL: [&str; 7] = ["init", "ls", "get", "new", "edit", "supersede", "check"
 const ALL_ON: &str = "Tool groups on: core, revise, lint, setup. Off: none. To change them, add a line such as \"relatum: disable lint\" to an agent-tools block in AGENTS.md";
 
 #[test]
-fn default_surface_is_1_1_0_except_list_changed() {
+fn default_surface_matches_the_1_4_0_fixture() {
     let run = serve(&[], &[]);
     assert_eq!(run.code, 0, "{}", run.stderr);
-    assert_eq!(list_result(&run), include_str!("fixtures/mcp/tools_list_1.1.0.json"));
-    assert_eq!(instructions(&run), include_str!("fixtures/mcp/instructions_1.1.0.txt"));
+    assert_eq!(list_result(&run), include_str!("fixtures/mcp/tools_list_1.4.0.json"));
+    assert_eq!(instructions(&run), include_str!("fixtures/mcp/instructions_1.4.0.txt"));
     // The only change to default initialize output: tools.listChanged is true.
     let init = json::parse(&run.lines[0]).unwrap();
     let capabilities = init.get("result").and_then(|r| r.get("capabilities")).unwrap();
@@ -117,7 +117,7 @@ fn default_surface_is_1_1_0_except_list_changed() {
         instructions(&all),
         format!(
             "{}{ALL_ON}; RELATUM_TOOLS / RELATUM_DISABLE are set and take precedence.\n",
-            include_str!("fixtures/mcp/instructions_1.1.0.txt")
+            include_str!("fixtures/mcp/instructions_1.4.0.txt")
         )
     );
 }

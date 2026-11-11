@@ -53,15 +53,92 @@ fn store(tag: &str) -> PathBuf {
 }
 
 #[test]
-fn utc_times_parse_and_format() {
-    assert_eq!(clock::parse_utc("1970-01-01"), Some(0));
-    assert_eq!(clock::parse_utc("2001-01-01"), Some(978_307_200));
-    assert_eq!(clock::parse_utc("2026-11-05T14:30:09Z"), Some(1_793_889_009));
+fn since_times_parse_and_format() {
+    assert_eq!(clock::parse_since("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(clock::parse_since("2001-01-01T00:00:00Z"), Some(978_307_200));
+    assert_eq!(clock::parse_since("2026-11-05T14:30:09Z"), Some(1_793_889_009));
+    // Offsets, fractions, minutes-only, and a space or lowercase t.
+    for same in [
+        "2026-11-06T01:30:09+11:00",
+        "2026-11-06T01:30:09+1100",
+        "2026-11-05T14:30:09.999Z",
+        "2026-11-05 14:30:09z",
+        "2026-11-05t04:30:09-10",
+    ] {
+        assert_eq!(clock::parse_since(same), Some(1_793_889_009), "{same}");
+    }
+    assert_eq!(clock::parse_since("2026-11-05T14:30Z"), Some(1_793_889_000));
     assert_eq!(clock::format_utc(1_793_889_009), "2026-11-05T14:30:09Z");
     assert_eq!(clock::format_utc(951_782_400), "2000-02-29T00:00:00Z");
-    for bad in ["2026-02-30", "2026-11-05T24:00:00Z", "2026-11-05T14:30:00", "yesterday", "2026-11-5"] {
-        assert_eq!(clock::parse_utc(bad), None, "{bad}");
+    for bad in [
+        "2026-02-30",
+        "2026-11-05T24:00:00Z",
+        "2026-11-05T14:3",
+        "2026-11-05T14:30:00+25:00",
+        "2026-11-05T14:30:00+1é",
+        "2026-11-05T14:30:00.Z",
+        "2026-11-05X",
+        "yesterday",
+        "2026-11-5",
+    ] {
+        assert_eq!(clock::parse_since(bad), None, "{bad}");
     }
+    // A bare date and a date-time with no zone are local time; whatever the
+    // zone, local midnight is within a day of UTC midnight.
+    let local = clock::parse_since("2026-11-06").unwrap();
+    let utc = clock::parse_since("2026-11-06T00:00:00Z").unwrap();
+    assert!((local - utc).abs() <= 14 * 3600, "{local} {utc}");
+    assert_eq!(clock::parse_since("2026-11-06T00:00:00"), Some(local));
+    assert_eq!(clock::parse_since("2026-11-06T00:00"), Some(local));
+}
+
+/// The M5 repro: a note written today (local) is listed by `since <today>`,
+/// in every time zone. 1.3.0 read the date as UTC midnight, which east of
+/// UTC is still in the future for the first hours of the local day.
+#[test]
+fn since_today_lists_a_note_written_now() {
+    let dir = store("today");
+    let today = clock::today();
+    let (code, out, err) = cli(&dir, &["ls", "w", "--since", &today]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.lines().count(), 2, "{out}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Specula M5: `ls {scope: "m5", since: "2026-11-06"}` was empty on the
+/// morning of 2026-11-06 at UTC+11. A note written at 02:00 local
+/// (2026-11-05T15:00Z) must be listed by `since 2026-11-06`, and one from
+/// the evening before must not. TZ is honoured by glibc and macOS.
+#[cfg(unix)]
+#[test]
+fn since_date_is_local_midnight_east_of_utc() {
+    let dir = store("tz");
+    let set = |id: &str, secs: u64| {
+        let path = dir.join(".swarmnotes").join(format!("{id}.md"));
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(UNIX_EPOCH + Duration::from_secs(secs)).unwrap();
+    };
+    set("w/b", 1_793_890_800); // 2026-11-05T15:00:00Z = 2026-11-06 02:00 at +11
+    set("w/c", 1_793_872_800); // 2026-11-05T10:00:00Z = 2026-11-05 21:00 at +11
+    let ls = |tz: &str, since: &str| -> String {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_relatum"))
+            .args(["ls", "w", "--since", since])
+            .current_dir(&dir)
+            .env_remove("SWARMNOTES_DIR")
+            .env("TZ", tz)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    // POSIX TZ: "AEDT-11" is eleven hours east of UTC; no tz database needed.
+    let east = ls("AEDT-11", "2026-11-06");
+    assert!(east.contains("w/b") && !east.contains("w/c"), "{east}");
+    assert_eq!(ls("AEDT-11", "2026-11-06T00:00:00"), east);
+    assert_eq!(ls("UTC0", "2026-11-06T02:00:00+11:00"), east);
+    // In UTC the same date starts eleven hours later.
+    assert_eq!(ls("UTC0", "2026-11-06"), "");
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -101,7 +178,8 @@ fn cli_limit_since_and_details() {
     assert_eq!(code, 1);
     assert_eq!(
         err,
-        "relatum: since must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC), not 'last week'\n"
+        "relatum: since must be a date like 2026-11-06 (from local midnight) or a time like \
+         2026-11-06T09:30:00Z or 2026-11-06T09:30:00+11:00 (no zone means local), not 'last week'\n"
     );
     let _ = fs::remove_dir_all(dir);
 }
@@ -159,14 +237,14 @@ fn mcp_limit_since_and_details() {
     assert_eq!(notes[0].get("updated").and_then(Value::as_str), Some(clock::today().as_str()));
     assert!(notes[1].get("author").is_none());
     let modified = notes[1].get("modified").and_then(Value::as_str).unwrap().to_string();
-    assert!(clock::parse_utc(&modified).is_some(), "{modified}");
+    assert!(clock::parse_since(&modified).is_some(), "{modified}");
     // A modified value works as the next since.
     assert!(ids(&call(&format!(r#"{{"since":"{modified}"}}"#))).contains(&"w/c".to_string()));
 
     for (args, needle) in [
         (r#"{"limit":0}"#, "limit must be at least 1"),
         (r#"{"limit":"5"}"#, "invalid arguments: limit must be an integer, got \"5\" (string). Call relatum_ls again with limit like 5."),
-        (r#"{"since":"soon"}"#, "since must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC)"),
+        (r#"{"since":"soon"}"#, "since must be a date like 2026-11-06 (from local midnight)"),
         (r#"{"details":"yes"}"#, "invalid arguments: details must be true or false, got \"yes\" (string)."),
     ] {
         let result = call(args);

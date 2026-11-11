@@ -14,3 +14,8 @@ include_superseded is true. If the working directory is not the project,
 the host must set SWARMNOTES_DIR to the .swarmnotes path.
 relatum_init creates a store only in the current working directory or at
 SWARMNOTES_DIR.
+Reach for notes before grep or asking another agent. After a context
+refresh, relatum_ls your scope and relatum_get your handoff note. Before
+you stop, write one (relatum_new, or relatum_supersede the last). Put what
+other agents call in an api note (e.g. <scope>/api); read theirs the same
+way.

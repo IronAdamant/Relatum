@@ -53,31 +53,32 @@ fn local_ymd() -> (i32, u32, u32) {
 }
 
 #[cfg(windows)]
+#[repr(C)]
+#[derive(Default)]
+struct SystemTime {
+    year: u16,
+    month: u16,
+    dow: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    ms: u16,
+}
+
+#[cfg(windows)]
+extern "system" {
+    fn GetLocalTime(out: *mut SystemTime);
+    fn TzSpecificLocalTimeToSystemTime(
+        zone: *const std::ffi::c_void,
+        local: *const SystemTime,
+        universal: *mut SystemTime,
+    ) -> i32;
+}
+
+#[cfg(windows)]
 fn windows_ymd() -> (i32, u32, u32) {
-    #[repr(C)]
-    struct SystemTime {
-        year: u16,
-        month: u16,
-        dow: u16,
-        day: u16,
-        hour: u16,
-        minute: u16,
-        second: u16,
-        ms: u16,
-    }
-    extern "system" {
-        fn GetLocalTime(out: *mut SystemTime);
-    }
-    let mut st = SystemTime {
-        year: 0,
-        month: 0,
-        dow: 0,
-        day: 0,
-        hour: 0,
-        minute: 0,
-        second: 0,
-        ms: 0,
-    };
+    let mut st = SystemTime::default();
     unsafe { GetLocalTime(&mut st) }
     if st.year == 0 {
         return utc_fallback();
@@ -86,24 +87,75 @@ fn windows_ymd() -> (i32, u32, u32) {
 }
 
 #[cfg(not(windows))]
+#[repr(C)]
+struct Tm {
+    tm_sec: i32,
+    tm_min: i32,
+    tm_hour: i32,
+    tm_mday: i32,
+    tm_mon: i32,
+    tm_year: i32,
+    tm_wday: i32,
+    tm_yday: i32,
+    tm_isdst: i32,
+    // tm_gmtoff and tm_zone on glibc and macOS, with room to spare.
+    pad: [i64; 8],
+}
+
+#[cfg(not(windows))]
+extern "C" {
+    fn time(tloc: *mut i64) -> i64;
+    fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+    fn mktime(tm: *mut Tm) -> i64;
+    fn tzset();
+}
+
+/// Seconds since the Unix epoch for a wall-clock time in the local time
+/// zone (the one `today()` and `updated` use). Falls back to UTC if the
+/// OS cannot convert it.
+fn local_to_epoch(y: i32, m: u32, d: u32, h: i64, mi: i64, s: i64) -> i64 {
+    let utc = days_from_civil(y, m, d) * 86_400 + h * 3600 + mi * 60 + s;
+    #[cfg(windows)]
+    {
+        let local = SystemTime {
+            year: y as u16,
+            month: m as u16,
+            dow: 0,
+            day: d as u16,
+            hour: h as u16,
+            minute: mi as u16,
+            second: s as u16,
+            ms: 0,
+        };
+        let mut out = SystemTime::default();
+        if unsafe { TzSpecificLocalTimeToSystemTime(std::ptr::null(), &local, &mut out) } == 0 {
+            return utc;
+        }
+        days_from_civil(out.year as i32, out.month as u32, out.day as u32) * 86_400
+            + i64::from(out.hour) * 3600
+            + i64::from(out.minute) * 60
+            + i64::from(out.second)
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        let mut tm = std::mem::zeroed::<Tm>();
+        tm.tm_year = y - 1900;
+        tm.tm_mon = m as i32 - 1;
+        tm.tm_mday = d as i32;
+        tm.tm_hour = h as i32;
+        tm.tm_min = mi as i32;
+        tm.tm_sec = s as i32;
+        tm.tm_isdst = -1;
+        tzset();
+        match mktime(&mut tm) {
+            -1 => utc,
+            secs => secs,
+        }
+    }
+}
+
+#[cfg(not(windows))]
 fn unix_ymd() -> (i32, u32, u32) {
-    #[repr(C)]
-    struct Tm {
-        tm_sec: i32,
-        tm_min: i32,
-        tm_hour: i32,
-        tm_mday: i32,
-        tm_mon: i32,
-        tm_year: i32,
-        tm_wday: i32,
-        tm_yday: i32,
-        tm_isdst: i32,
-        pad: [i64; 8],
-    }
-    extern "C" {
-        fn time(tloc: *mut i64) -> i64;
-        fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
-    }
     unsafe {
         let mut secs: i64 = 0;
         if time(&mut secs) < 0 {
@@ -152,37 +204,75 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146_097 + doe as i64 - 719_468
 }
 
-/// Seconds since the Unix epoch for `YYYY-MM-DD` (midnight UTC) or
-/// `YYYY-MM-DDTHH:MM:SSZ`. `None` for anything else.
-pub fn parse_utc(text: &str) -> Option<i64> {
-    let (date, time) = match text.len() {
-        10 => (text, None),
-        20 if text.as_bytes()[10] == b'T' && text.ends_with('Z') => (&text[..10], Some(&text[11..19])),
-        _ => return None,
-    };
+/// Seconds since the Unix epoch for an `ls` `since` value, `None` if it is
+/// not one. A bare `YYYY-MM-DD` is local midnight: the same calendar as
+/// `updated` and `today()`, so a date read off a note means that day.
+/// A date-time is `YYYY-MM-DDTHH:MM[:SS[.frac]]` (`T`, `t`, or a space)
+/// followed by `Z`, `+HH:MM`, `-HH:MM`, `+HHMM`, `+HH`, or nothing for local
+/// time. Fractions of a second are dropped, since `since` is inclusive to
+/// the second.
+pub fn parse_since(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let date = text.get(..10)?;
     if !valid_date(date) {
         return None;
     }
     let y: i32 = date[0..4].parse().ok()?;
     let m: u32 = date[5..7].parse().ok()?;
     let d: u32 = date[8..10].parse().ok()?;
-    let mut secs = days_from_civil(y, m, d) * 86_400;
-    if let Some(time) = time {
-        let b = time.as_bytes();
-        if b[2] != b':' || b[5] != b':' {
-            return None;
-        }
-        let part = |range: std::ops::Range<usize>| -> Option<i64> {
-            let field = &time[range];
-            field.bytes().all(|c| c.is_ascii_digit()).then(|| field.parse().ok())?
-        };
-        let (h, mi, s) = (part(0..2)?, part(3..5)?, part(6..8)?);
-        if h > 23 || mi > 59 || s > 59 {
-            return None;
-        }
-        secs += h * 3600 + mi * 60 + s;
+    let rest = &text[10..];
+    if rest.is_empty() {
+        return Some(local_to_epoch(y, m, d, 0, 0, 0));
     }
-    Some(secs)
+    let rest = rest.strip_prefix(['T', 't', ' '])?;
+    let digits2 = |field: &str| -> Option<i64> {
+        (field.len() == 2 && field.bytes().all(|c| c.is_ascii_digit())).then(|| field.parse().ok())?
+    };
+    let h = digits2(rest.get(0..2)?)?;
+    let mi = digits2(rest.get(3..5).filter(|_| rest.as_bytes()[2] == b':')?)?;
+    let mut rest = &rest[5..];
+    let mut s = 0;
+    if let Some(tail) = rest.strip_prefix(':') {
+        s = digits2(tail.get(0..2)?)?;
+        rest = &tail[2..];
+        if let Some(frac) = rest.strip_prefix('.') {
+            let n = frac.bytes().take_while(u8::is_ascii_digit).count();
+            if n == 0 {
+                return None;
+            }
+            rest = &frac[n..];
+        }
+    }
+    if h > 23 || mi > 59 || s > 59 {
+        return None;
+    }
+    let offset = match rest {
+        "" => return Some(local_to_epoch(y, m, d, h, mi, s)),
+        "Z" | "z" => 0,
+        zone => {
+            let sign = match zone.as_bytes()[0] {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            // ASCII only, so the byte slices below are on char boundaries.
+            let zone = &zone[1..];
+            if !zone.is_ascii() {
+                return None;
+            }
+            let (zh, zm) = match zone.len() {
+                2 => (digits2(zone)?, 0),
+                4 => (digits2(&zone[..2])?, digits2(&zone[2..])?),
+                5 if zone.as_bytes()[2] == b':' => (digits2(&zone[..2])?, digits2(&zone[3..])?),
+                _ => return None,
+            };
+            if zh > 23 || zm > 59 {
+                return None;
+            }
+            sign * (zh * 3600 + zm * 60)
+        }
+    };
+    Some(days_from_civil(y, m, d) * 86_400 + h * 3600 + mi * 60 + s - offset)
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` for seconds since the Unix epoch.

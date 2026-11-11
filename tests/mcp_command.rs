@@ -66,3 +66,21 @@ fn assert_initialize(bin: &str, args: &[&str]) {
     let version = format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"));
     assert!(stdout.contains(&version), "{stdout}");
 }
+
+/// `--version` alone prints the binary name and the package version, so an
+/// install can be checked. Help output is unchanged.
+#[test]
+fn version_flag_prints_the_package_version() {
+    for (bin, name) in [
+        (env!("CARGO_BIN_EXE_relatum"), "relatum"),
+        (env!("CARGO_BIN_EXE_relatum-mcp"), "relatum-mcp"),
+        (env!("CARGO_BIN_EXE_swarmnotes"), "swarmnotes"),
+    ] {
+        for flag in ["--version", "-V"] {
+            let out = Command::new(bin).arg(flag).output().unwrap();
+            assert!(out.status.success(), "{bin} {flag}");
+            let text = String::from_utf8(out.stdout).unwrap().replace("\r\n", "\n");
+            assert_eq!(text, format!("{name} {}\n", env!("CARGO_PKG_VERSION")), "{bin} {flag}");
+        }
+    }
+}

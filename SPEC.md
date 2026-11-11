@@ -75,7 +75,7 @@ inline as `[a, b]`. A `#` comment line is allowed. Fields:
 | field           | required | meaning                                                         |
 |-----------------|----------|-----------------------------------------------------------------|
 | `kind`          | yes      | one of the kinds below                                          |
-| `summary`       | yes      | one line, <= 100 chars; shown in listings                        |
+| `summary`       | yes      | one line, <= 200 chars; shown in listings                        |
 | `author`        | no       | who wrote it (`parent`, or the agent's name)                    |
 | `updated`       | no       | ISO date (`YYYY-MM-DD`) of last edit                            |
 | `tags`          | no       | inline list of slugs, for filtering                             |
@@ -173,7 +173,7 @@ list is what v0.2 treats as a hard failure:
 - missing or unclosed frontmatter; a frontmatter line that is not `key: value`
 - duplicate or unknown frontmatter keys
 - `kind` missing or not one of the kinds above
-- `summary` missing or longer than 100 characters
+- `summary` missing or longer than 200 characters (100 before Relatum 1.4.0)
 - empty body
 - `status` not `active`, `draft`, or `superseded`
 - `superseded` without `superseded_by`, a target that is not a valid id, a
@@ -194,17 +194,24 @@ Warnings (printed, exit 0 when there are no errors):
 superseded row is marked `[-> <id>]`. Drafts are marked `[draft]`.
 Opt-in, and absent from the default output: `--limit N` prints at most N
 rows and then `... K more (...)`; `--since TIME` keeps notes whose file
-was modified at or after TIME, a UTC `YYYY-MM-DD` or
-`YYYY-MM-DDTHH:MM:SSZ` (every write sets it, so this is "written or
+was modified at or after TIME (every write sets it, so this is "written or
 changed since"; it is inclusive at one-second resolution, so a note written
-in the same second as TIME is listed again rather than missed);
+in the same second as TIME is listed again rather than missed). TIME is a
+date `YYYY-MM-DD`, meaning local midnight (the calendar `updated` uses),
+or a date-time `YYYY-MM-DDTHH:MM[:SS[.frac]]` followed by `Z`, `+HH:MM`,
+`-HH:MM`, or nothing for local time (Relatum 1.3.0 read a bare date as
+UTC midnight);
 `--details` appends `by <author>` and `at <modified>`.
 The note format has no creation time; `updated` is the date of the last
 edit. `relatum_ls` takes the same `limit`, `since`, and `details`; it
 reports left-out rows as `more` and adds `author`, `updated`, and
 `modified` per note.
 `relatum get` prints the live note at the end of the chain and the path it
-followed.
+followed. `relatum_get` returns the same note with `chain` (the ids it
+followed); with `include_superseded` each note also carries `superseded`,
+every note whose chain ends at it (`id`, `superseded_by`, `summary`,
+`body`), oldest first, so a handoff written as a delta keeps the earlier
+rounds in reach.
 
 ## 8. Versioning
 
@@ -224,7 +231,12 @@ the current working directory or at `SWARMNOTES_DIR`. A tool result is a
 JSON object in `structuredContent.result`, repeated as compact JSON text.
 A tool error names the next step: with no store, call `relatum_init` or set
 `SWARMNOTES_DIR`; for a scope with no notes yet, write one with
-`relatum_new`; for an invalid id, the id grammar above. An argument of the
+`relatum_new`; for an invalid id, the id grammar above; for a
+`relatum_supersede` whose new note does not exist, write it with
+`relatum_new` first. `relatum_new`, `relatum_edit`, and the CLI reject a
+summary over 200 characters (the input schema's `maxLength`), or one with a
+line break, saying how long it is and what the limit is; they never
+truncate. An argument of the
 wrong type, or a missing one, is a one-line error starting `invalid
 arguments: ` that names the field, the value received when short, what
 was expected, and how to call again.

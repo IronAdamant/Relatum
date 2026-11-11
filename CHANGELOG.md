@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.4.0 - 2026-11-11
+
+Fixes from the Specula M5 run.
+
+- Summaries may be up to 200 characters (was 100), for `new`, `edit`, and
+  `check` alike. About six lanes lost a retry to the old limit. Longer is
+  still an error, never a silent cut, and it now says how long the summary
+  is and what the limit is. A summary with a line break is refused too
+  (before, it broke the note's frontmatter). The limit is in the
+  `relatum_new` and `relatum_edit` input schemas (`maxLength: 200`) and
+  descriptions. A store whose summaries run past 100 characters fails
+  `check` under Relatum 1.3.0 and Examen.
+- `relatum_supersede` with a new note that does not exist says to write it
+  with `relatum_new` first (that was the failed supersede after a failed
+  new).
+- `ls --since` / `relatum_ls` `since`: a bare date now means local
+  midnight, the calendar `updated` uses. 1.3.0 read it as UTC midnight, so
+  east of UTC `since <today>` was in the future for the first hours of the
+  day and returned nothing, and notes from early that day were missed (the
+  Specula `since: "2026-11-06"` report, at UTC+11). A date-time may now
+  carry `+HH:MM` / `-HH:MM` or no zone (local), seconds are optional, and a
+  fraction is ignored. `YYYY-MM-DDTHH:MM:SSZ` reads as before.
+- `relatum_get` takes `include_superseded`: each returned note also carries
+  `superseded`, every note whose supersede chain ends at it (`id`,
+  `superseded_by`, `summary`, `body`), oldest first. Handoffs written as
+  deltas keep the earlier rounds in reach, whether you ask for the old id
+  or the live one. Without it the reply is unchanged.
+- Tool descriptions and the initialize instructions say when notes beat
+  grep or asking: a handoff note after a context refresh or before you
+  stop, an api note for code other agents call. The `relatum_ls` argument
+  descriptions lose stray runs of spaces.
+- `relatum --version` (and `relatum-mcp`, `swarmnotes`; also `-V`) prints
+  the name and version. Help output is unchanged.
+- The parity harness drops descriptions and `maxLength` from the
+  `tools/list` comparison (Relatum writes its own) and `relatum_get`'s
+  `include_superseded` from its schema; CONTRIBUTING.md lists the 1.4.0
+  differences.
+
 ## 1.3.0 - 2026-11-05
 
 - Agents choose tool groups per project: the first `agent-tools` block in

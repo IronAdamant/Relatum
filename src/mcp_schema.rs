@@ -1,5 +1,6 @@
 //! Tool list payload. Field order matches the MCP Python SDK's JSON schema.
 
+use crate::grammar::SUMMARY_MAX;
 use crate::json::{self, Value};
 use crate::prog;
 
@@ -22,12 +23,31 @@ include_superseded is true. If the working directory is not the project,
 the host must set SWARMNOTES_DIR to the .swarmnotes path.
 {init} creates a store only in the current working directory or at
 SWARMNOTES_DIR.
-",
+{when}",
         name_title = title_name(),
         name = prog::NAME,
         get = prog::tool("get"),
         ls = prog::tool("ls"),
         init = prog::tool("init"),
+        when = when_to_use(),
+    )
+}
+
+/// The paragraph of the instructions that says when notes beat grep or
+/// asking (1.4.0; Examen had none). Lines wrap after the tool names expand.
+pub fn when_to_use() -> String {
+    format!(
+        "\
+Reach for notes before grep or asking another agent. After a context
+refresh, {ls} your scope and {get} your handoff note. Before
+you stop, write one ({new}, or {supersede} the last). Put what
+other agents call in an api note (e.g. <scope>/api); read theirs the same
+way.
+",
+        ls = prog::tool("ls"),
+        get = prog::tool("get"),
+        new = prog::tool("new"),
+        supersede = prog::tool("supersede"),
     )
 }
 
@@ -42,18 +62,35 @@ fn title_name() -> String {
 pub fn tools() -> Value {
     let supersede = format!(
         "\
-Mark old as replaced by new. new must already exist and resolve to a live note.\n\
+Mark old as replaced by new, e.g. a fresh handoff or api note replacing the\n\
+last one. Write new with {new} first; it must exist and resolve to a live note.\n\
 \n\
-Later {get} calls on old follow the chain. {ls} hides old unless\n\
-include_superseded is true.\n",
+Later {get} calls on old follow the chain (include_superseded also returns\n\
+old's body). {ls} hides old unless include_superseded is true.\n",
+        new = prog::tool("new"),
         get = prog::tool("get"),
         ls = prog::tool("ls"),
+    );
+    let new = format!(
+        "\
+Create a note. Write one for any fact more than one agent needs, so briefs\n\
+and reports cite its id instead of pasting it: a handoff before your context\n\
+runs out or your work ends (state, open items, gotchas), an api note when\n\
+other agents will call your code, a finding or attempt from your work.\n\
+\n\
+Fails if the id already exists; never overwrites. To replace a note, write\n\
+the new one, then call {supersede}. kind is decision, constraint,\n\
+convention, context, format, finding, or attempt. summary is one line, at\n\
+most {max} characters. body is the fact (keep it under ~300 words). tags is\n\
+a list of slugs.\n",
+        supersede = prog::tool("supersede"),
+        max = SUMMARY_MAX,
     );
     json::arr(vec![
         tool("init", INIT, init_schema(), false),
         tool("ls", LS, ls_schema(), false),
         tool("get", GET, get_schema(), true),
-        tool("new", NEW, new_schema(), true),
+        tool("new", &new, new_schema(), true),
         tool("edit", &edit_description(), edit_schema(), true),
         tool("supersede", &supersede, supersede_schema(), true),
         tool("check", CHECK, check_schema(), false),
@@ -154,14 +191,17 @@ fn ls_schema() -> Value {
                 "limit",
                 described(
                     optional_typed("Limit", "integer"),
-                    "Return at most this many notes. When notes are left out, the result                      has more (how many).",
+                    "Return at most this many notes. When notes are left out, the result has more (how many).",
                 ),
             ),
             (
                 "since",
                 described(
                     optional_str("Since"),
-                    "Only notes written or changed at or after this UTC time:                      2026-11-05 or 2026-11-05T14:30:00Z. Use a modified value from an                      earlier details listing to see what is new.",
+                    "Only notes written or changed at or after this time: a date such as 2026-11-05 \
+                     (from local midnight, the calendar updated uses) or a time such as \
+                     2026-11-05T14:30:00Z or 2026-11-05T14:30:00+11:00 (no zone means local). \
+                     Pass a modified value from an earlier details listing to see what is new.",
                 ),
             ),
             (
@@ -202,19 +242,38 @@ fn optional_typed(title: &str, type_name: &str) -> Value {
 fn get_schema() -> Value {
     schema(
         &prog::tool("get"),
-        json::obj(vec![(
-            "ids",
-            json::obj(vec![
-                (
-                    "items",
-                    json::obj(vec![("type", json::s("string"))]),
+        json::obj(vec![
+            (
+                "ids",
+                json::obj(vec![
+                    (
+                        "items",
+                        json::obj(vec![("type", json::s("string"))]),
+                    ),
+                    ("title", json::s("Ids")),
+                    ("type", json::s("array")),
+                ]),
+            ),
+            (
+                "include_superseded",
+                described(
+                    bool_prop("Include Superseded"),
+                    "Also return superseded: the notes each live note replaced (id, superseded_by, \
+                     summary, body), oldest first. For handoffs written as deltas.",
                 ),
-                ("title", json::s("Ids")),
-                ("type", json::s("array")),
-            ]),
-        )]),
+            ),
+        ]),
         &["ids"],
     )
+}
+
+/// A summary argument: its limit is in the schema and the description.
+fn summary_prop(property: Value, description: &str) -> Value {
+    let Value::Object(mut pairs) = described(property, description) else {
+        unreachable!("described keeps an object")
+    };
+    pairs.insert(1, ("maxLength".to_string(), Value::Number(SUMMARY_MAX.to_string())));
+    Value::Object(pairs)
 }
 
 fn new_schema() -> Value {
@@ -223,7 +282,13 @@ fn new_schema() -> Value {
         json::obj(vec![
             ("id", str_prop("Id", None)),
             ("kind", str_prop("Kind", None)),
-            ("summary", str_prop("Summary", None)),
+            (
+                "summary",
+                summary_prop(
+                    str_prop("Summary", None),
+                    &format!("One line, at most {SUMMARY_MAX} characters; shown in listings."),
+                ),
+            ),
             ("body", str_prop("Body", None)),
             ("author", optional_str("Author")),
             (
@@ -256,7 +321,7 @@ fn edit_description() -> String {
         "\
 Correct a note in place: replace its summary, body, or tags; updated becomes today.\n\
 \n\
-For small fixes by the note's author (author must match the note's author).\n\
+For small fixes to a note you wrote (author must match the note's author).\n\
 To replace a note, or to change one someone else wrote, write a new note and\n\
 call {supersede} with old set to this note. Superseded notes cannot be edited.\n",
         supersede = prog::tool("supersede"),
@@ -286,7 +351,13 @@ fn edit_schema() -> Value {
                 "author",
                 described(str_prop("Author", None), "Who is editing; must be the note's author."),
             ),
-            ("summary", described(optional_str("Summary"), "New one-line summary, at most 100 characters.")),
+            (
+                "summary",
+                summary_prop(
+                    optional_str("Summary"),
+                    &format!("New one-line summary, at most {SUMMARY_MAX} characters."),
+                ),
+            ),
             ("body", described(optional_str("Body"), "New body; replaces the whole body.")),
             ("tags", described(tags, "New tag slugs; [] removes the tags.")),
         ]),
@@ -310,7 +381,8 @@ fn check_schema() -> Value {
 }
 
 const INIT: &str = "\
-Create the default store and its _shared/report-format note.\n\
+Create the default store and its _shared/report-format note. Call it when\n\
+another tool reports that no store exists.\n\
 \n\
 Idempotent. path must be the current working directory, the directory in\n\
 SWARMNOTES_DIR, or the project directory whose .swarmnotes is\n\
@@ -318,28 +390,27 @@ SWARMNOTES_DIR. Any other path is an error. Returns root (the store path)\n\
 and report_format (its note id).\n";
 
 const LS: &str = "\
-List notes as id, kind, summary, and status.\n\
+List notes as id, kind, summary, and status. Use it before grep or asking:\n\
+after a context refresh, list your scope to find your handoff note; before\n\
+using another agent's code, list its scope for an api note.\n\
 \n\
-scope is a directory under the store; empty lists everything. kind filters\n\
+scope is a directory under the store (e.g. m5/editor); empty lists everything. kind filters\n\
 to one of decision, constraint, convention, context, format, finding,\n\
 attempt. Superseded notes are omitted unless include_superseded is true.\n\
 tag filters to one slug. The store is .swarmnotes/ or $SWARMNOTES_DIR.\n";
 
 const GET: &str = "\
-Fetch one or more notes by ID. Follows superseded_by, including multi-hop chains.\n\
+Fetch one or more notes by ID: the notes a brief lists under Read first,\n\
+your handoff after a context refresh, or another agent's api note before\n\
+you call its code. Follows superseded_by, including multi-hop chains.\n\
 \n\
-Returns notes (the live note, with chain) and errors (ids that failed).\n\
-Other ids are still returned when one id is missing.\n";
-
-const NEW: &str = "\
-Create a note. Fails if the id already exists; never overwrites.\n\
-\n\
-kind is decision, constraint, convention, context, format, finding, or\n\
-attempt. summary is one line, at most 100 characters. body is the fact\n\
-(keep it under ~300 words). tags is a list of slugs.\n";
+Returns notes (the live note, with chain: the ids followed) and errors (ids\n\
+that failed). Other ids are still returned when one id is missing.\n\
+include_superseded adds the bodies of the notes each live note replaced.\n";
 
 const CHECK: &str = "\
-Lint every note in the store.\n\
+Lint every note in the store. Run it after editing note files by hand or\n\
+before committing .swarmnotes/.\n\
 \n\
 ok is false when there are errors. warnings (long bodies, missing author\n\
 or updated) do not fail the check. errors and warnings are the same\n\
