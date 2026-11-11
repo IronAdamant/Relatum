@@ -40,8 +40,14 @@ CLI and a stdio MCP server over the same files. No service, no account.
 - Parents write `decision`, `constraint`, `convention`, `context`, and
   `format` notes. Children write `finding` and `attempt` notes in their own
   scope.
+- A summary is one line of up to 200 characters; the body holds the rest.
 - Creating a note never overwrites one. To change your mind, write a new
   note and `supersede` the old ID; `get` on the old ID follows the chain.
+  For handoffs written as deltas, `relatum_get` with `include_superseded`
+  also returns the notes the live one replaced.
+- `ls --since 2026-11-06` lists what was written or changed since local
+  midnight that day; a time such as `2026-11-06T09:30:00Z` or
+  `2026-11-06T09:30+11:00` works too.
 - Every write lands whole, so agents in parallel never read a half-written
   note.
 - `check` lints the store.
@@ -68,7 +74,8 @@ cargo build --release --locked   # target/release/relatum and relatum-mcp
 ```
 
 Each install gives `relatum` (CLI), `relatum-mcp` (MCP server; `relatum mcp`
-is the same), and `swarmnotes` (the old CLI name). Relatum is not on
+is the same), and `swarmnotes` (the old CLI name). `--version` on any of
+them prints the version. Relatum is not on
 crates.io or PyPI; the unscoped `examen` packages there and on npm are
 unrelated projects.
 
@@ -105,7 +112,9 @@ env = { SWARMNOTES_DIR = "/absolute/path/to/project/.swarmnotes" }
 
 Tools: `relatum_init`, `relatum_ls`, `relatum_get`, `relatum_new`,
 `relatum_edit`, `relatum_supersede`, `relatum_check`. Results are compact JSON, and errors
-say what to call next. To teach agents the protocol, paste
+say what to call next. Each tool's description says when it beats grep or
+asking (handoff notes after a context refresh, api notes between agents).
+To teach agents the protocol, paste
 [AGENTS.snippet.md](AGENTS.snippet.md) into the project's `CLAUDE.md` or
 `AGENTS.md`, or install [skills/relatum](skills/relatum/SKILL.md).
 
@@ -222,12 +231,12 @@ request, and one `ls` call. Memory is the peak resident set (`VmHWM`) of
 | memory check big (RSS) | 22940 KB | 4044 KB |
 
 `cargo run --release --locked --example bench -- target/release/relatum
-target/release/relatum-mcp` repeats the measurement. It reads
-`python-legacy`.
+target/release/relatum-mcp` repeats the measurement. It reads the
+`pre-rust-python-legacy` tag.
 
 ## Coming from Examen
 
-Examen 0.3.0 (Python) is frozen on the `python-legacy` branch. Relatum
+Examen 0.3.0 (Python) is frozen at the `pre-rust-python-legacy` tag. Relatum
 reads the same `.swarmnotes/` files and honours `SWARMNOTES_DIR`, with no
 migration. The CLI is `relatum` and the MCP tools are `relatum_*` instead
 of `examen_*`. MCP argument errors are one line that says what to send,

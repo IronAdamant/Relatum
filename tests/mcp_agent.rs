@@ -237,3 +237,126 @@ fn edit_corrects_own_live_notes_and_points_elsewhere_otherwise() {
     assert_eq!(structured(14).get("ok"), Some(&Value::Bool(true)));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Specula M5: summaries over 100 characters cost about six lanes a retry,
+/// and the supersede that followed a failed new failed too. The limit is
+/// 200 for new, edit, and check alike, it is in the schema, and the error
+/// gives the length and the limit.
+#[test]
+fn summary_limit_is_200_in_schema_and_errors() {
+    let tools = relatum::mcp_schema::tools();
+    for name in ["relatum_new", "relatum_edit"] {
+        let tool = tools.as_array().unwrap().iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name)).unwrap();
+        let summary = tool.get("inputSchema").and_then(|s| s.get("properties")).and_then(|p| p.get("summary")).unwrap();
+        assert_eq!(summary.get("maxLength"), Some(&Value::Number("200".into())), "{name}");
+        assert!(summary.get("description").and_then(Value::as_str).unwrap().contains("at most 200 characters"), "{name}");
+    }
+    let dir = scratch("summary");
+    session(&dir, &[("relatum_init", "{}")]);
+    let sum = |n: usize| "s".repeat(n);
+    let calls: Vec<(&str, String)> = vec![
+        ("relatum_new", r#"{"id":"m5/a/old","kind":"context","summary":"old","body":"b","author":"a"}"#.into()),
+        ("relatum_new", format!(r#"{{"id":"m5/a/handoff","kind":"context","summary":"{}","body":"b","author":"a"}}"#, sum(201))),
+        ("relatum_supersede", r#"{"old":"m5/a/old","new":"m5/a/handoff"}"#.into()),
+        ("relatum_new", format!(r#"{{"id":"m5/a/handoff","kind":"context","summary":"{}","body":"b","author":"a"}}"#, sum(200))),
+        ("relatum_edit", format!(r#"{{"id":"m5/a/handoff","author":"a","summary":"{}"}}"#, sum(250))),
+        ("relatum_edit", r#"{"id":"m5/a/handoff","author":"a","summary":"two\nlines"}"#.into()),
+        ("relatum_check", "{}".into()),
+    ];
+    let borrowed: Vec<(&str, &str)> = calls.iter().map(|(name, args)| (*name, args.as_str())).collect();
+    let results = session(&dir, &borrowed);
+    let limit = "summary is 201 characters; the limit is 200. Shorten it and put the detail in the body";
+    assert!(is_error(&results[1]) && text(&results[1]).ends_with(limit), "{}", text(&results[1]));
+    assert!(is_error(&results[2]), "{}", text(&results[2]));
+    assert_eq!(
+        text(&results[2]),
+        "Error executing tool relatum_supersede: no such note: m5/a/handoff. Write the replacement \
+         first with relatum_new (summary at most 200 characters), then call relatum_supersede again."
+    );
+    assert!(!is_error(&results[3]), "{}", text(&results[3]));
+    assert!(text(&results[4]).contains("summary is 250 characters; the limit is 200"), "{}", text(&results[4]));
+    assert!(text(&results[5]).contains("summary must be one line"), "{}", text(&results[5]));
+    let check = results[6].get("structuredContent").and_then(|s| s.get("result")).unwrap();
+    assert_eq!(check.get("ok"), Some(&Value::Bool(true)), "{}", text(&results[6]));
+    // check flags a hand-written summary past the limit with the same words.
+    std::fs::write(
+        dir.join(".swarmnotes/m5/a/long.md"),
+        format!("---\nkind: context\nsummary: {}\nauthor: a\nupdated: 2026-11-06\n---\n\nb\n", sum(201)),
+    )
+    .unwrap();
+    let results = session(&dir, &[("relatum_check", "{}")]);
+    assert!(text(&results[0]).contains("m5/a/long: summary is 201 characters; the limit is 200"), "{}", text(&results[0]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Specula M5: delta handoffs lost the earlier content, because get follows
+/// superseded_by to the live note. include_superseded returns the notes each
+/// live note replaced, oldest first; the default reply is unchanged.
+#[test]
+fn get_include_superseded_returns_the_replaced_notes() {
+    let dir = scratch("history");
+    let new = |id: &str, body: &str| {
+        format!(r#"{{"id":"{id}","kind":"context","summary":"{id}","body":"{body}","author":"a"}}"#)
+    };
+    let calls: Vec<(&str, String)> = vec![
+        ("relatum_init", "{}".into()),
+        ("relatum_new", new("t/handoff", "round one")),
+        ("relatum_new", new("t/handoff-2", "round two delta")),
+        ("relatum_new", new("t/handoff-3", "round three delta")),
+        ("relatum_new", new("t/side", "side note")),
+        ("relatum_new", new("t/alone", "never replaced")),
+        ("relatum_supersede", r#"{"old":"t/handoff","new":"t/handoff-2"}"#.into()),
+        ("relatum_supersede", r#"{"old":"t/handoff-2","new":"t/handoff-3"}"#.into()),
+        ("relatum_supersede", r#"{"old":"t/side","new":"t/handoff-3"}"#.into()),
+        ("relatum_get", r#"{"ids":["t/handoff"]}"#.into()),
+        ("relatum_get", r#"{"ids":["t/handoff","t/handoff-3","t/alone","t/missing"],"include_superseded":true}"#.into()),
+        ("relatum_get", r#"{"ids":["t/handoff"],"include_superseded":"yes"}"#.into()),
+    ];
+    let borrowed: Vec<(&str, &str)> = calls.iter().map(|(name, args)| (*name, args.as_str())).collect();
+    let results = session(&dir, &borrowed);
+    for (i, result) in results.iter().enumerate().take(9) {
+        assert!(!is_error(result), "call {i}: {}", text(result));
+    }
+    let notes = |i: usize| -> Vec<Value> {
+        assert!(!is_error(&results[i]), "call {i}: {}", text(&results[i]));
+        results[i].get("structuredContent").and_then(|s| s.get("result")).and_then(|r| r.get("notes"))
+            .and_then(Value::as_array).unwrap().to_vec()
+    };
+    let plain = &notes(9)[0];
+    assert!(plain.get("superseded").is_none());
+    assert_eq!(json::write_compact(plain.get("chain").unwrap()), r#"["t/handoff","t/handoff-2","t/handoff-3"]"#);
+    let full = notes(10);
+    assert_eq!(full.len(), 3);
+    let history = json::write_compact(full[0].get("superseded").unwrap());
+    assert_eq!(
+        history,
+        r#"[{"id":"t/handoff","superseded_by":"t/handoff-2","summary":"t/handoff","body":"round one"},{"id":"t/handoff-2","superseded_by":"t/handoff-3","summary":"t/handoff-2","body":"round two delta"},{"id":"t/side","superseded_by":"t/handoff-3","summary":"t/side","body":"side note"}]"#
+    );
+    // Asking for the live note by its own id gives the same history.
+    assert_eq!(json::write_compact(full[1].get("superseded").unwrap()), history);
+    assert_eq!(json::write_compact(full[2].get("superseded").unwrap()), "[]");
+    let errors = results[10].get("structuredContent").and_then(|s| s.get("result")).and_then(|r| r.get("errors")).unwrap();
+    assert!(json::write_compact(errors).contains("t/missing"));
+    assert!(text(&results[11]).starts_with("Error executing tool relatum_get: invalid arguments: include_superseded must be true or false"), "{}", text(&results[11]));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Specula M5: agents did not know when notes beat grep. The tools that
+/// matter at a context refresh say so, and so do the instructions.
+#[test]
+fn descriptions_say_when_to_use_notes() {
+    let tools = relatum::mcp_schema::tools();
+    let description = |name: &str| -> String {
+        tools.as_array().unwrap().iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|tool| tool.get("description")).and_then(Value::as_str).unwrap().to_string()
+    };
+    for name in ["relatum_ls", "relatum_get", "relatum_new", "relatum_supersede"] {
+        let text = description(name);
+        assert!(text.contains("handoff") && text.contains("api note"), "{name}: {text}");
+    }
+    assert!(description("relatum_ls").contains("before grep"));
+    let instructions = relatum::mcp_schema::instructions();
+    assert!(instructions.contains("before grep") && instructions.contains("handoff") && instructions.contains("api"), "{instructions}");
+}

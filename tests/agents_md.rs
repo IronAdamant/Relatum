@@ -106,10 +106,10 @@ fn instructions(init: &Value) -> String {
     init.get("instructions").and_then(Value::as_str).unwrap().to_string()
 }
 
-/// The instructions lines after the 1.1.0 text.
+/// The instructions lines after the default text.
 fn tail(init: &Value) -> Vec<String> {
     instructions(init)
-        .strip_prefix(include_str!("fixtures/mcp/instructions_1.1.0.txt"))
+        .strip_prefix(include_str!("fixtures/mcp/instructions_1.4.0.txt"))
         .unwrap()
         .lines()
         .map(str::to_string)

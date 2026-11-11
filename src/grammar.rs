@@ -20,7 +20,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "status",
     "superseded_by",
 ];
-pub const SUMMARY_MAX: usize = 100;
+/// Longest summary, in characters. Raised from 100 in 1.4.0.
+pub const SUMMARY_MAX: usize = 200;
 pub const WORD_BUDGET: usize = 300;
 pub const MAX_SUPERSEDE_HOPS: usize = 32;
 pub const DIR_NAME: &str = ".swarmnotes";

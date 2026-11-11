@@ -40,7 +40,8 @@ real interpreter, not a venv's `python.exe`, which is a launcher. CI runs
 the harness and the bench on all three and checks every table row. Both
 are std only. The frozen Python release is
 the reference oracle: the harness loads `examen.py` from the
-`python-legacy` branch (`git fetch origin python-legacy`) into a Python 3
+`pre-rust-python-legacy` tag (`git fetch origin tag pre-rust-python-legacy`;
+it was the `python-legacy` branch) into a Python 3
 process, and runs `python -m examen_mcp`, which needs
 `pip install "mcp==2.3.0"`. Set `PARITY_PYTHON` to choose the interpreter;
 otherwise `python3`, then `python`. Nothing uses the network after that.
@@ -68,12 +69,23 @@ and the MCP responses, stderr log, and files. It normalises only these:
 - CR and LF are folded on CLI pipes and MCP stderr. On Windows both
   programs write CRLF there, as CPython's text-mode streams do.
 - `relatum_edit` (Relatum only) is dropped from `tools/list`.
-- `relatum_ls`'s opt-in `limit`, `since`, and `details` arguments are
-  dropped from its input schema. `relatum ls -h` lists the matching CLI
-  flags; its usage line, which argparse errors print, is unchanged.
-- MCP tool descriptions are compared after docstring dedent. Relatum sends
-  them unindented; Examen's carry Python 3.12 docstring indentation (3.13
-  strips it).
+- `relatum_ls`'s opt-in `limit`, `since`, and `details` arguments and
+  `relatum_get`'s `include_superseded` are dropped from the input schemas.
+  `relatum ls -h` lists the matching CLI flags; its usage line, which
+  argparse errors print, is unchanged.
+- **Intentional difference: descriptions.** Tool and argument descriptions,
+  and the summary's `maxLength`, are dropped from `tools/list` on both
+  sides. Relatum writes its own: when to use each tool, and (1.4.0) the
+  200-character summary limit. The initialize instructions are not part of
+  the comparison; Relatum's add a paragraph on when to reach for notes.
+- **Intentional differences in 1.4.0, not hit by the harness session:** a
+  summary may be up to 200 characters (Examen: 100) and must be one line;
+  the length error says how long it is and what the limit is; a bare
+  `--since` date is local midnight (Examen had no `--since`); and
+  `relatum_supersede` to a missing new note says to write it first; and
+  `--version` alone prints the version (Examen's argparse rejected it).
+  `tests/notes.rs`, `tests/ls_options.rs`, and `tests/mcp_agent.rs` cover
+  them.
 - A tool result's JSON text is compared as data. Relatum writes it compact;
   Examen indented it. `structuredContent` is compared unchanged.
 - Relatum's MCP errors add a next step for a missing store, a scope with no

@@ -31,6 +31,11 @@ The storage directory stays `.swarmnotes/`.
 - Picking work up later? List with `details` and keep the newest
   `modified`; next time pass it as `since` to see only what changed
   (inclusive, to the second, so notes from that same second show again).
+- Before your context runs out or your work ends, write a handoff note in
+  your scope (state, open items, gotchas), or supersede the last one. A
+  successor lists your scope and reads it; `include_superseded` on
+  `relatum_get` returns earlier rounds too. Put what other agents call in
+  an `api` note in your scope, and read theirs before asking.
 - Record what you learn as `finding` notes and what failed as `attempt` notes
   in your scope. In your report, cite their IDs instead of restating them.
 - Only edit notes you wrote. If you disagree with one, write a `finding` and
@@ -41,7 +46,7 @@ The storage directory stays `.swarmnotes/`.
 
 ```
 relatum_ls        scope, kind, tag, include_superseded; limit, since, details
-relatum_get       one or more IDs; follows superseded notes
+relatum_get       one or more IDs; follows superseded notes; include_superseded
 relatum_new       id, kind, summary, body, author, tags
 relatum_edit      id, author; summary, body, tags (small fix by the author)
 relatum_supersede old, new
@@ -60,7 +65,7 @@ relatum check
 ```
 
 Kinds: decision, constraint, convention, context, format (parent);
-finding, attempt (child). Keep a summary to one line (<= 100 chars) and a body
+finding, attempt (child). Keep a summary to one line (<= 200 chars) and a body
 under about 300 words. If it is longer, split it.
 
 **Choosing groups (MCP).** Relatum's MCP tools come in groups. `core`

@@ -5,7 +5,7 @@ use crate::json::{self, Value};
 use crate::mcp_groups::{Groups, Surface};
 use crate::mcp_schema;
 use crate::mcp_support::{
-    InvokeErr, bool_or, check_optional_str, optional_int, optional_string, optional_tags, path_is_null,
+    InvokeErr, bool_or, check_optional_bool, check_optional_str, optional_int, optional_string, optional_tags, path_is_null,
     require_present_str, require_str, require_string_list, store_for_init, string_or, type_error,
     validate_ls, Want,
 };
@@ -294,16 +294,28 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
                 prog::tool("get")
             )));
         }
+        check_optional_bool(name, args, "include_superseded")?;
+        let history = bool_or(args, "include_superseded", false);
         let root = tool_root()?;
-        let mut notes = Vec::new();
+        let mut found = Vec::new();
         let mut errors = Vec::new();
         for id in ids {
             match ops::resolve(&root, &id) {
-                Ok(resolved) => notes.push(fetched(&id, &resolved)),
+                Ok(resolved) => found.push((id, resolved)),
                 Err(err) => errors.push(json::obj(vec![
                     ("id", json::s(&id)),
                     ("error", json::s(&agent_message(err))),
                 ])),
+            }
+        }
+        let mut notes: Vec<Value> = found.iter().map(|(id, resolved)| fetched(id, resolved)).collect();
+        if history && !found.is_empty() {
+            let live: Vec<&str> = found.iter().map(|(_, resolved)| resolved.final_id.as_str()).collect();
+            let replaced = ops::replaced_notes(&root, &live).map_err(note)?;
+            for (fetched, replaced) in notes.iter_mut().zip(replaced) {
+                if let Value::Object(pairs) = fetched {
+                    pairs.push(("superseded".to_string(), replaced_list(&replaced)));
+                }
             }
         }
         return Ok(json::obj(vec![
@@ -336,7 +348,19 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
         let old = require_present_str(name, args, "old")?;
         let new = require_present_str(name, args, "new")?;
         let root = tool_root()?;
-        let (old, new) = ops::supersede_note(&root, &old, &new).map_err(note)?;
+        let (old, new) = ops::supersede_note(&root, &old, &new).map_err(|err| {
+            // Usually the relatum_new for the replacement failed first.
+            if err.message == format!("no such note: {new}") {
+                return InvokeErr::Note(format!(
+                    "no such note: {new}. Write the replacement first with {tool} (summary at most \
+                     {max} characters), then call {supersede} again.",
+                    tool = prog::tool("new"),
+                    max = grammar::SUMMARY_MAX,
+                    supersede = prog::tool("supersede"),
+                ));
+            }
+            note(err)
+        })?;
         return Ok(json::obj(vec![
             ("old", json::s(&old)),
             ("new", json::s(&new)),
@@ -405,6 +429,23 @@ fn fetched(requested: &str, resolved: &ops::Resolved) -> Value {
         }
     }
     json::obj(pairs)
+}
+
+/// `superseded` on a fetched note: the notes it replaced, oldest first.
+fn replaced_list(replaced: &[ops::Replaced]) -> Value {
+    json::arr(
+        replaced
+            .iter()
+            .map(|old| {
+                json::obj(vec![
+                    ("id", json::s(&old.id)),
+                    ("superseded_by", json::s(&old.superseded_by)),
+                    ("summary", json::s(old.note.get_str("summary").unwrap_or(""))),
+                    ("body", json::s(old.note.body.trim_end_matches('\n'))),
+                ])
+            })
+            .collect(),
+    )
 }
 
 fn note(err: NoteError) -> InvokeErr {

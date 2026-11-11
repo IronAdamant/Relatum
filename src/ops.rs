@@ -50,11 +50,13 @@ pub struct Listing {
     pub more: usize,
 }
 
-/// `--since` / `since`: a UTC date or date-time.
+/// `--since` / `since`: a local date, or a date-time with or without a zone
+/// (see `clock::parse_since`).
 pub fn parse_since(text: &str) -> NoteResult<i64> {
-    clock::parse_utc(text).ok_or_else(|| {
+    clock::parse_since(text).ok_or_else(|| {
         NoteError::new(format!(
-            "since must be YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC), not {}",
+            "since must be a date like 2026-11-06 (from local midnight) or a time like \
+             2026-11-06T09:30:00Z or 2026-11-06T09:30:00+11:00 (no zone means local), not {}",
             py_repr(text)
         ))
     })
@@ -98,6 +100,28 @@ pub enum TagsIn {
     List(Vec<String>),
 }
 
+/// The summary `new` and `edit` write: trimmed, one line, at most
+/// `SUMMARY_MAX` characters. The error gives the length and the limit so
+/// one retry is enough.
+pub fn checked_summary(summary: &str) -> NoteResult<&str> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err(NoteError::new("missing summary"));
+    }
+    if summary.contains(['\n', '\r']) {
+        return Err(NoteError::new(
+            "summary must be one line; put the detail in the body",
+        ));
+    }
+    let len = summary.chars().count();
+    if len > SUMMARY_MAX {
+        return Err(NoteError::new(format!(
+            "summary is {len} characters; the limit is {SUMMARY_MAX}. Shorten it and put the detail in the body"
+        )));
+    }
+    Ok(summary)
+}
+
 pub fn add_note(
     root: &Path,
     note_id: &str,
@@ -113,16 +137,7 @@ pub fn add_note(
             grammar::joined(KINDS)
         )));
     }
-    let summary = summary.trim();
-    if summary.is_empty() {
-        return Err(NoteError::new("missing summary"));
-    }
-    if summary.chars().count() > SUMMARY_MAX {
-        return Err(NoteError::new(format!(
-            "summary is {} chars; max {SUMMARY_MAX}",
-            summary.chars().count()
-        )));
-    }
+    let summary = checked_summary(summary)?;
     if body.trim().is_empty() {
         return Err(NoteError::new(
             "empty body (pass --body or pipe text on stdin)",
@@ -308,6 +323,66 @@ pub fn resolve(root: &Path, note_id: &str) -> NoteResult<Resolved> {
     })
 }
 
+/// A superseded note in the history of a live one.
+pub struct Replaced {
+    pub id: String,
+    pub superseded_by: String,
+    pub note: Note,
+}
+
+/// For each live id, every superseded note whose `superseded_by` chain ends
+/// there, oldest first (farthest from the live note, then by id). This is
+/// the content `get` skips when it follows a chain, and the notes a live
+/// note replaced when it is fetched by its own id. One walk of the store;
+/// notes that do not read or parse are left to `check`.
+pub fn replaced_notes(root: &Path, live: &[&str]) -> NoteResult<Vec<Vec<Replaced>>> {
+    let found = store::walk_notes(root, "", false)?;
+    let paths: Vec<&Path> = found.iter().map(|entry| entry.path.as_path()).collect();
+    let mut superseded = std::collections::HashMap::new();
+    for (entry, text) in found.iter().zip(meta::read_note_texts(&paths)) {
+        let Ok(text) = text else { continue };
+        let note = meta::parse(&text);
+        if note.get_str("status") != Some("superseded") {
+            continue;
+        }
+        if let Some(next) = note.get_str("superseded_by").filter(|next| !next.is_empty()) {
+            superseded.insert(entry.id.clone(), (next.to_string(), note));
+        }
+    }
+    let mut out: Vec<Vec<(usize, Replaced)>> = live.iter().map(|_| Vec::new()).collect();
+    for (id, (next, note)) in &superseded {
+        // Follow the chain to the first note that is not superseded.
+        let mut end = next.as_str();
+        let mut hops = 1;
+        while let Some((after, _)) = superseded.get(end) {
+            if hops >= grammar::MAX_SUPERSEDE_HOPS || after == id {
+                break;
+            }
+            end = after;
+            hops += 1;
+        }
+        for (slot, live_id) in out.iter_mut().zip(live) {
+            if end == *live_id {
+                slot.push((
+                    hops,
+                    Replaced {
+                        id: id.clone(),
+                        superseded_by: next.clone(),
+                        note: note.clone(),
+                    },
+                ));
+            }
+        }
+    }
+    Ok(out
+        .into_iter()
+        .map(|mut slot| {
+            slot.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+            slot.into_iter().map(|(_, replaced)| replaced).collect()
+        })
+        .collect())
+}
+
 fn meta_truthy(value: &MetaVal) -> bool {
     match value {
         MetaVal::Str(text) => !text.is_empty(),
@@ -354,16 +429,7 @@ pub fn edit_note(root: &Path, note_id: &str, author: &str, change: NoteEdit) -> 
         _ => note.set("author", MetaVal::Str(author.to_string())),
     }
     if let Some(summary) = change.summary {
-        let summary = summary.trim();
-        if summary.is_empty() {
-            return Err(NoteError::new("missing summary"));
-        }
-        if summary.chars().count() > SUMMARY_MAX {
-            return Err(NoteError::new(format!(
-                "summary is {} chars; max {SUMMARY_MAX}",
-                summary.chars().count()
-            )));
-        }
+        let summary = checked_summary(&summary)?;
         note.set("summary", MetaVal::Str(summary.to_string()));
     }
     if let Some(body) = change.body {
@@ -451,7 +517,7 @@ pub fn check(root: &Path) -> NoteResult<(Vec<String>, Vec<String>)> {
                 let len = summary.chars().count();
                 if len > SUMMARY_MAX {
                     errors.push(format!(
-                        "{where_} summary is {len} chars; max {SUMMARY_MAX}"
+                        "{where_} summary is {len} characters; the limit is {SUMMARY_MAX}"
                     ));
                 }
             }

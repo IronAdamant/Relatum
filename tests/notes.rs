@@ -113,8 +113,18 @@ fn new_validates_and_reads_stdin() {
     _scratch.init();
     assert!(run(&["new", "Bad/ID", "--kind", "decision", "--summary", "s", "--body", "b"]).2.contains("invalid note id"));
     assert!(run(&["new", "x", "--kind", "nope", "--summary", "s", "--body", "b"]).2.contains("kind must be"));
-    let long = "y".repeat(101);
-    assert!(run(&["new", "x", "--kind", "decision", "--summary", &long, "--body", "b"]).2.contains("max 100"));
+    // Specula M5: 101-200 character summaries cost lanes retries under 1.3.0.
+    let long = "y".repeat(201);
+    assert_eq!(
+        run(&["new", "x", "--kind", "decision", "--summary", &long, "--body", "b"]).2,
+        "relatum: summary is 201 characters; the limit is 200. Shorten it and put the detail in the body\n"
+    );
+    assert!(run(&["new", "x", "--kind", "decision", "--summary", "one\ntwo", "--body", "b"]).2.contains("summary must be one line"));
+    let most = "y".repeat(200);
+    let (code, _, err) = run(&["new", "fits", "--kind", "decision", "--summary", &most, "--body", "b", "--author", "p"]);
+    assert_eq!(code, 0, "{err}");
+    let (code, out, _) = run(&["check"]);
+    assert_eq!(code, 0, "{out}");
     assert!(run(&["new", "x", "--kind", "decision", "--summary", "   ", "--body", "b"]).2.contains("missing summary"));
     assert!(run(&["new", "x", "--kind", "decision", "--summary", "s", "--body", "b", "--tags", "Nope"]).2.contains("invalid tags"));
     let (code, _, err) = run(&["new", "e", "--kind", "decision", "--summary", "s", "--body", "  \n"]);

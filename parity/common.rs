@@ -42,7 +42,7 @@ pub fn fail(message: &str) -> ! {
 }
 
 pub fn legacy_ref() -> String {
-    for reference in ["python-legacy", "origin/python-legacy"] {
+    for reference in ["pre-rust-python-legacy", "python-legacy", "origin/python-legacy"] {
         let found = Command::new("git")
             .args(["rev-parse", "--verify", reference])
             .current_dir(root())
@@ -55,10 +55,11 @@ pub fn legacy_ref() -> String {
             return reference.to_string();
         }
     }
-    fail("python-legacy is not available. Fetch it with: git fetch origin python-legacy")
+    fail("Examen 0.3.0 is not available. Fetch it with: git fetch origin tag pre-rust-python-legacy")
 }
 
-/// Write examen.py and examen_mcp.py from the python-legacy branch into `dest`.
+/// Write examen.py and examen_mcp.py from the pre-rust-python-legacy tag (the
+/// python-legacy branch before it) into `dest`.
 pub fn extract_legacy(dest: &Path) {
     let reference = legacy_ref();
     fs::create_dir_all(dest).unwrap_or_else(|err| fail(&format!("{}: {err}", dest.display())));

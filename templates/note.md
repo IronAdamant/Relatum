@@ -1,6 +1,6 @@
 ---
 kind: <decision|constraint|convention|context|format|finding|attempt>
-summary: <one line, <= 100 chars. This is what shows up in listings>
+summary: <one line, <= 200 chars. This is what shows up in listings>
 author: <parent | agent name>
 updated: <YYYY-MM-DD>
 tags: []

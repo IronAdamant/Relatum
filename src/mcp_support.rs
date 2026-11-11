@@ -122,15 +122,16 @@ pub(crate) fn validate_ls(tool: &str, args: &Value) -> Result<(), InvokeErr> {
     check_optional_str(tool, args, "kind")?;
     check_optional_str(tool, args, "tag")?;
     check_optional_str(tool, args, "since")?;
-    for key in ["include_superseded", "details"] {
-        match lookup(args, key) {
-            None | Some(Value::Bool(_)) => {}
-            Some(value) => {
-                return Err(type_error(tool, key, Want::Bool, value))
-            }
-        }
-    }
+    check_optional_bool(tool, args, "include_superseded")?;
+    check_optional_bool(tool, args, "details")?;
     optional_int(tool, args, "limit").map(|_| ())
+}
+
+pub(crate) fn check_optional_bool(tool: &str, args: &Value, key: &str) -> Result<(), InvokeErr> {
+    match lookup(args, key) {
+        None | Some(Value::Bool(_)) => Ok(()),
+        Some(value) => Err(type_error(tool, key, Want::Bool, value)),
+    }
 }
 
 /// An optional integer argument. `None` when absent or null.
