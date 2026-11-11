@@ -17,9 +17,13 @@ struct Run {
 /// One server session with the given variables and extra request lines.
 fn serve(env: &[(&str, &str)], extra: &[String]) -> Run {
     // A fresh directory each time, so no AGENTS.md or store is inherited.
+    // The counter keeps parallel tests apart where the clock is coarse
+    // (macOS: microseconds), so one test never deletes another's directory.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "relatum-groups-{}-{}",
+        "relatum-groups-{}-{}-{}",
         std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
