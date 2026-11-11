@@ -30,8 +30,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fetch the Python 0.3.0 branch
-        run: git fetch origin python-legacy:python-legacy
+      - name: Fetch the Python 0.3.0 tag
+        run: git fetch --force origin tag pre-rust-python-legacy
 
       - name: Test
         run: cargo test --locked

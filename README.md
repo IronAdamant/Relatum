@@ -231,12 +231,12 @@ request, and one `ls` call. Memory is the peak resident set (`VmHWM`) of
 | memory check big (RSS) | 22940 KB | 4044 KB |
 
 `cargo run --release --locked --example bench -- target/release/relatum
-target/release/relatum-mcp` repeats the measurement. It reads
-`python-legacy`.
+target/release/relatum-mcp` repeats the measurement. It reads the
+`pre-rust-python-legacy` tag.
 
 ## Coming from Examen
 
-Examen 0.3.0 (Python) is frozen on the `python-legacy` branch. Relatum
+Examen 0.3.0 (Python) is frozen at the `pre-rust-python-legacy` tag. Relatum
 reads the same `.swarmnotes/` files and honours `SWARMNOTES_DIR`, with no
 migration. The CLI is `relatum` and the MCP tools are `relatum_*` instead
 of `examen_*`. MCP argument errors are one line that says what to send,

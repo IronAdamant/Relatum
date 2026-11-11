@@ -31,6 +31,8 @@ Fixes from the Specula M5 run.
   grep or asking: a handoff note after a context refresh or before you
   stop, an api note for code other agents call. The `relatum_ls` argument
   descriptions lose stray runs of spaces.
+- CI and the parity tools read Examen 0.3.0 from the `pre-rust-python-legacy`
+  tag; the `python-legacy` branch is gone from GitHub.
 - `relatum --version` (and `relatum-mcp`, `swarmnotes`; also `-V`) prints
   the name and version. Help output is unchanged.
 - The parity harness drops descriptions and `maxLength` from the

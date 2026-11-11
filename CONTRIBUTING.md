@@ -40,7 +40,8 @@ real interpreter, not a venv's `python.exe`, which is a launcher. CI runs
 the harness and the bench on all three and checks every table row. Both
 are std only. The frozen Python release is
 the reference oracle: the harness loads `examen.py` from the
-`python-legacy` branch (`git fetch origin python-legacy`) into a Python 3
+`pre-rust-python-legacy` tag (`git fetch origin tag pre-rust-python-legacy`;
+it was the `python-legacy` branch) into a Python 3
 process, and runs `python -m examen_mcp`, which needs
 `pip install "mcp==2.3.0"`. Set `PARITY_PYTHON` to choose the interpreter;
 otherwise `python3`, then `python`. Nothing uses the network after that.
