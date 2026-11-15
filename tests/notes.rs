@@ -113,7 +113,8 @@ fn new_validates_and_reads_stdin() {
     _scratch.init();
     assert!(run(&["new", "Bad/ID", "--kind", "decision", "--summary", "s", "--body", "b"]).2.contains("invalid note id"));
     assert!(run(&["new", "x", "--kind", "nope", "--summary", "s", "--body", "b"]).2.contains("kind must be"));
-    // Specula M5: 101-200 character summaries cost lanes retries under 1.3.0.
+    // On a large Rust workspace, summaries of 101-200 characters cost
+    // lanes retries under 1.3.0.
     let long = "y".repeat(201);
     assert_eq!(
         run(&["new", "x", "--kind", "decision", "--summary", &long, "--body", "b"]).2,

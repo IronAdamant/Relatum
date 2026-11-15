@@ -2,7 +2,7 @@
 
 ## 1.4.0 - 2026-11-11
 
-Fixes from the Specula M5 run.
+Fixes from a run on a large Rust workspace.
 
 - Summaries may be up to 200 characters (was 100), for `new`, `edit`, and
   `check` alike. About six lanes lost a retry to the old limit. Longer is
@@ -18,10 +18,11 @@ Fixes from the Specula M5 run.
 - `ls --since` / `relatum_ls` `since`: a bare date now means local
   midnight, the calendar `updated` uses. 1.3.0 read it as UTC midnight, so
   east of UTC `since <today>` was in the future for the first hours of the
-  day and returned nothing, and notes from early that day were missed (the
-  Specula `since: "2026-11-06"` report, at UTC+11). A date-time may now
-  carry `+HH:MM` / `-HH:MM` or no zone (local), seconds are optional, and a
-  fraction is ignored. `YYYY-MM-DDTHH:MM:SSZ` reads as before.
+  day and returned nothing, and notes from early that day were missed (a
+  `since: "2026-11-06"` report from a large Rust workspace, at UTC+11). A
+  date-time may now carry `+HH:MM` / `-HH:MM` or no zone (local), seconds
+  are optional, and a fraction is ignored. `YYYY-MM-DDTHH:MM:SSZ` reads as
+  before.
 - `relatum_get` takes `include_superseded`: each returned note also carries
   `superseded`, every note whose supersede chain ends at it (`id`,
   `superseded_by`, `summary`, `body`), oldest first. Handoffs written as

@@ -238,10 +238,10 @@ fn edit_corrects_own_live_notes_and_points_elsewhere_otherwise() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Specula M5: summaries over 100 characters cost about six lanes a retry,
-/// and the supersede that followed a failed new failed too. The limit is
-/// 200 for new, edit, and check alike, it is in the schema, and the error
-/// gives the length and the limit.
+/// On a large Rust workspace, summaries over 100 characters cost about six
+/// lanes a retry, and the supersede that followed a failed new failed too.
+/// The limit is 200 for new, edit, and check alike, it is in the schema, and
+/// the error gives the length and the limit.
 #[test]
 fn summary_limit_is_200_in_schema_and_errors() {
     let tools = relatum::mcp_schema::tools();
@@ -290,9 +290,10 @@ fn summary_limit_is_200_in_schema_and_errors() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Specula M5: delta handoffs lost the earlier content, because get follows
-/// superseded_by to the live note. include_superseded returns the notes each
-/// live note replaced, oldest first; the default reply is unchanged.
+/// On a large Rust workspace, delta handoffs lost the earlier content,
+/// because get follows superseded_by to the live note. include_superseded
+/// returns the notes each live note replaced, oldest first; the default
+/// reply is unchanged.
 #[test]
 fn get_include_superseded_returns_the_replaced_notes() {
     let dir = scratch("history");
@@ -342,8 +343,8 @@ fn get_include_superseded_returns_the_replaced_notes() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Specula M5: agents did not know when notes beat grep. The tools that
-/// matter at a context refresh say so, and so do the instructions.
+/// On a large Rust workspace, agents did not know when notes beat grep. The
+/// tools that matter at a context refresh say so, and so do the instructions.
 #[test]
 fn descriptions_say_when_to_use_notes() {
     let tools = relatum::mcp_schema::tools();
