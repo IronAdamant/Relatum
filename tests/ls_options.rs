@@ -105,10 +105,10 @@ fn since_today_lists_a_note_written_now() {
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Specula M5: `ls {scope: "m5", since: "2026-11-06"}` was empty on the
-/// morning of 2026-11-06 at UTC+11. A note written at 02:00 local
-/// (2026-11-05T15:00Z) must be listed by `since 2026-11-06`, and one from
-/// the evening before must not. TZ is honoured by glibc and macOS.
+/// On a large Rust workspace, `ls {scope: "m5", since: "2026-11-06"}` was
+/// empty on the morning of 2026-11-06 at UTC+11. A note written at 02:00
+/// local (2026-11-05T15:00Z) must be listed by `since 2026-11-06`, and one
+/// from the evening before must not. TZ is honoured by glibc and macOS.
 #[cfg(unix)]
 #[test]
 fn since_date_is_local_midnight_east_of_utc() {
