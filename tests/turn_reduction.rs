@@ -109,7 +109,8 @@ fn new_args(id: &str, summary: &str, extra: &str) -> String {
 }
 
 fn status_of(dir: &Path, id: &str) -> String {
-    let text = fs::read_to_string(dir.join(".swarmnotes").join(format!("{id}.md"))).unwrap();
+    // read_note_text undoes the CRLF that notes are written with on Windows.
+    let text = relatum::meta::read_note_text(&dir.join(".swarmnotes").join(format!("{id}.md"))).unwrap();
     let note = relatum::meta::parse(&text);
     format!(
         "{}{}",
