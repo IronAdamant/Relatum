@@ -27,17 +27,22 @@ fn expect(prog: &str, args: &[&str], file: &str) {
         "swarmnotes_check_h" => include_str!("fixtures/help/swarmnotes_check_h.txt"),
         other => panic!("unknown fixture {other}"),
     };
-    if file.ends_with("_ls_h") {
-        // Relatum's ls adds --limit, --since, and --details after the
-        // CPython-captured options. The usage line and everything before
-        // "options:" stay byte-for-byte what argparse printed; the options
-        // block is argparse's own output for the extended parser.
+    if file.ends_with("_ls_h") || file.ends_with("_new_h") {
+        // Relatum's ls adds --limit, --since, --details, and --bodies, and
+        // its new adds --supersedes and --batch, after the CPython-captured
+        // options. The usage line and everything before "options:" stay
+        // byte-for-byte what argparse printed; the options block is
+        // argparse's own output for the extended parser.
         let (head, _) = expected.split_once("options:
 ").unwrap();
         let (out_head, out_options) = out.split_once("options:
 ").unwrap();
         assert_eq!(out_head, head, "{file}");
-        let options = include_str!("fixtures/help/relatum_ls_options.txt");
+        let options = if file.ends_with("_ls_h") {
+            include_str!("fixtures/help/relatum_ls_options.txt")
+        } else {
+            include_str!("fixtures/help/relatum_new_options.txt")
+        };
         assert_eq!(format!("options:
 {out_options}"), options, "{file}");
         return;

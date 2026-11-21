@@ -124,6 +124,7 @@ pub(crate) fn validate_ls(tool: &str, args: &Value) -> Result<(), InvokeErr> {
     check_optional_str(tool, args, "since")?;
     check_optional_bool(tool, args, "include_superseded")?;
     check_optional_bool(tool, args, "details")?;
+    check_optional_bool(tool, args, "include_bodies")?;
     optional_int(tool, args, "limit").map(|_| ())
 }
 
@@ -153,6 +154,7 @@ pub(crate) enum Want {
     Bool,
     Int,
     StrList,
+    NoteList,
 }
 
 impl Want {
@@ -162,6 +164,7 @@ impl Want {
             Want::Bool => "true or false",
             Want::Int => "an integer",
             Want::StrList => "a list of strings",
+            Want::NoteList => "a list of note objects",
         }
     }
 
@@ -171,6 +174,7 @@ impl Want {
             Want::Bool => "true",
             Want::Int => "5",
             Want::StrList => "[\"net/retry\"]",
+            Want::NoteList => "[{\"id\": \"net/api\", \"kind\": \"context\", \"summary\": \"...\", \"body\": \"...\"}]",
         }
     }
 }
@@ -205,8 +209,10 @@ fn missing(tool: &str, key: &str, args: &Value) -> InvokeErr {
         fields.push(key.to_string());
     }
     let word = if fields.len() == 1 { "argument" } else { "arguments" };
+    // relatum_new also takes a batch instead of one note's fields.
+    let or_batch = if tool == prog::tool("new") { ", or notes" } else { "" };
     let text = format!(
-        "{INVALID}missing required {word} {}. {tool} needs {}.",
+        "{INVALID}missing required {word} {}. {tool} needs {}{or_batch}.",
         fields.join(", "),
         and_list(required.iter().copied().chain((!required.contains(&key)).then_some(key)))
     );
@@ -241,7 +247,7 @@ pub(crate) fn type_error(tool: &str, key: &str, want: Want, value: &Value) -> In
 }
 
 /// The value an agent sent, compact, when it is short; otherwise its kind.
-fn received(value: &Value) -> String {
+pub(crate) fn received(value: &Value) -> String {
     let kind = match value {
         Value::Null => return "null".to_string(),
         Value::Bool(_) => "boolean",

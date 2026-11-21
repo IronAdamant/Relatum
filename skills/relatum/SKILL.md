@@ -22,7 +22,8 @@ The storage directory stays `.swarmnotes/`.
   ```
 - Always include `_shared/report-format` so reports come back short.
 - Changed your mind? Make a small fix in place (`relatum_edit`). If the
-  note is being replaced, write a new one and supersede the old id.
+  note is being replaced, write a new one with `supersedes` set to the old
+  id. Several notes go in one `relatum_new` call as `notes`.
 
 **When you are spawned (child):**
 - Read every note in "Read first" before doing anything else.
@@ -32,8 +33,9 @@ The storage directory stays `.swarmnotes/`.
   `modified`; next time pass it as `since` to see only what changed
   (inclusive, to the second, so notes from that same second show again).
 - Before your context runs out or your work ends, write a handoff note in
-  your scope (state, open items, gotchas), or supersede the last one. A
-  successor lists your scope and reads it; `include_superseded` on
+  your scope (state, open items, gotchas), with `supersedes` set to the
+  last one. A successor lists your scope with `include_bodies` and reads it
+  in the same call; `include_superseded` on
   `relatum_get` returns earlier rounds too. Put what other agents call in
   an `api` note in your scope, and read theirs before asking.
 - Record what you learn as `finding` notes and what failed as `attempt` notes
@@ -45,9 +47,9 @@ The storage directory stays `.swarmnotes/`.
 `.swarmnotes/` files as the CLI:
 
 ```
-relatum_ls        scope, kind, tag, include_superseded; limit, since, details
+relatum_ls        scope, kind, tag, include_superseded; limit, since, details, include_bodies
 relatum_get       one or more IDs; follows superseded notes; include_superseded
-relatum_new       id, kind, summary, body, author, tags
+relatum_new       id, kind, summary, body, author, tags, supersedes; or notes: [...]
 relatum_edit      id, author; summary, body, tags (small fix by the author)
 relatum_supersede old, new
 relatum_check
@@ -57,9 +59,10 @@ relatum_init      create .swarmnotes/ if it is missing (cwd or SWARMNOTES_DIR on
 Otherwise use the CLI (`relatum`; `swarmnotes` is the same command):
 
 ```
-relatum ls [scope] [--kind K] [--tag T] [--all] [--limit N] [--since TIME] [--details]
+relatum ls [scope] [--kind K] [--tag T] [--all] [--limit N] [--since TIME] [--details] [--bodies]
 relatum get ID [ID...]
-relatum new ID --kind K --summary "..." --author NAME --body "..."
+relatum new ID --kind K --summary "..." --author NAME --body "..." [--supersedes OLD]
+relatum new --batch FILE     # JSON array of notes, - for stdin; all or none
 relatum supersede OLD NEW
 relatum check
 ```

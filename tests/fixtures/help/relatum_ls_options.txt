@@ -7,3 +7,5 @@ options:
   --since TIME  only notes written at or after TIME: 2026-11-05 (local
                 midnight), 2026-11-05T14:30:00Z, or 2026-11-05T14:30+11:00
   --details     also show each note's author and modified time
+  --bodies      also print each note's body (cut at 4000 characters, 40000
+                in all)

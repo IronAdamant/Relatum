@@ -16,6 +16,11 @@ pub enum Command {
         author: Option<String>,
         tags: Option<String>,
         body: Option<String>,
+        /// `--supersedes OLD`: mark OLD superseded by this note, same call.
+        supersedes: Option<String>,
+        /// `--batch FILE` (`-` is stdin): a JSON array of notes, written
+        /// all or none. The other arguments are then empty.
+        batch: Option<String>,
     },
     Ls {
         scope: String,
@@ -26,6 +31,8 @@ pub enum Command {
         limit: Option<usize>,
         since: Option<String>,
         details: bool,
+        /// `--bodies`: print each note's body too.
+        bodies: bool,
     },
     Get {
         ids: Vec<String>,
@@ -188,10 +195,27 @@ fn parse_child(cmd: &str, args: &[String]) -> Result<Command, ChildFail> {
     }
 
     let mut missing = Vec::new();
+    let batch = cmd == "new" && values.iter().any(|(name, _)| *name == "--batch");
+    if batch {
+        // A batch file carries every note's fields; nothing else may be given.
+        let mut clash: Vec<String> = positionals.iter().take(1).map(|_| "id".to_string()).collect();
+        clash.extend(
+            values
+                .iter()
+                .filter(|(name, _)| *name != "--batch")
+                .map(|(name, _)| (*name).to_string()),
+        );
+        if !clash.is_empty() {
+            return Err(ChildFail::Message(format!(
+                "argument --batch: not allowed with {} (put them in the batch file)",
+                clash.join(", ")
+            )));
+        }
+    }
     match cmd {
         "init" => {}
         "new" => {
-            if positionals.is_empty() {
+            if positionals.is_empty() && !batch {
                 missing.push("id".to_string());
             }
         }
@@ -213,7 +237,7 @@ fn parse_child(cmd: &str, args: &[String]) -> Result<Command, ChildFail> {
         _ => {}
     }
     for flag in flags {
-        if flag.required && values.iter().all(|(name, _)| *name != flag.name) {
+        if flag.required && !batch && values.iter().all(|(name, _)| *name != flag.name) {
             missing.push(flag.name.to_string());
         }
     }
@@ -251,12 +275,14 @@ fn parse_child(cmd: &str, args: &[String]) -> Result<Command, ChildFail> {
             path: positionals.first().cloned().unwrap_or_else(|| ".".to_string()),
         },
         "new" => Command::New {
-            id: positionals.remove(0),
+            id: if batch { String::new() } else { positionals.remove(0) },
             kind: opt("--kind").unwrap_or_default(),
             summary: opt("--summary").unwrap_or_default(),
             author: opt("--author"),
             tags: opt("--tags"),
             body: opt("--body"),
+            supersedes: opt("--supersedes"),
+            batch: opt("--batch"),
         },
         "ls" => Command::Ls {
             scope: positionals.first().cloned().unwrap_or_default(),
@@ -277,6 +303,7 @@ fn parse_child(cmd: &str, args: &[String]) -> Result<Command, ChildFail> {
             },
             since: opt("--since"),
             details: opt("--details").is_some(),
+            bodies: opt("--bodies").is_some(),
         },
         "get" => Command::Get { ids: positionals },
         "supersede" => Command::Supersede {
@@ -296,6 +323,8 @@ fn flags_for(cmd: &str) -> Vec<Flag> {
             Flag { name: "--author", takes: true, required: false },
             Flag { name: "--tags", takes: true, required: false },
             Flag { name: "--body", takes: true, required: false },
+            Flag { name: "--supersedes", takes: true, required: false },
+            Flag { name: "--batch", takes: true, required: false },
         ],
         "ls" => vec![
             Flag { name: "--kind", takes: true, required: false },
@@ -304,6 +333,7 @@ fn flags_for(cmd: &str) -> Vec<Flag> {
             Flag { name: "--limit", takes: true, required: false },
             Flag { name: "--since", takes: true, required: false },
             Flag { name: "--details", takes: false, required: false },
+            Flag { name: "--bodies", takes: false, required: false },
         ],
         _ => Vec::new(),
     }

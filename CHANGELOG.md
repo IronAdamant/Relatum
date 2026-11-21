@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+Fewer turns per agent. An A/B run counted every tool call as a model turn
+that re-reads the conversation: one agent took 7 calls (4 `relatum_new`, 3
+`relatum_supersede`) to replace three api notes and add a handoff, and
+readers called `relatum_ls` then `relatum_get`.
+
+- `relatum_new` takes `supersedes`, the id of a live note it replaces: the
+  new note is written and the old one marked superseded in the same call.
+  The result adds `superseded`. A missing, already superseded, or invalid
+  old id writes nothing. CLI: `relatum new ... --supersedes OLD` prints the
+  id, then `OLD -> NEW`.
+- `relatum_new` takes `notes`, a list of notes with the same fields
+  (`supersedes` included), in place of one note's fields. Every note is
+  checked before any file is written, so one bad note writes none; a write
+  that still fails (a race, a full disk) removes the notes already written
+  and puts superseded notes back byte for byte. Errors name the item
+  (`notes[1]: ...`). The result is `ids` and, when any note superseded
+  another, `superseded` (`old`, `new` pairs). CLI: `relatum new --batch
+  FILE` (`-` reads stdin) takes the same JSON array.
+- `relatum_ls` takes `include_bodies`, and `relatum ls` `--bodies`: each
+  listed note's body too, after the usual filters and superseded handling.
+  A body is cut at 4000 characters and bodies stop after 40000 in all;
+  `truncated: true` (CLI: a `[truncated; ...]` line) marks a cut or left-out
+  body, which `get` returns whole.
+- `relatum_new` has no `required` list in its input schema, since a call
+  sends one note's fields or `notes`; the missing-argument error ends
+  `, or notes.` The `tools/list` result grows from 7592 to 8654 bytes
+  (core only: 4301 to 5311).
+- Tool descriptions, the initialize instructions, AGENTS.snippet.md, and
+  the skill mention `supersedes`, `notes`, and `include_bodies`.
+- The parity harness drops the new arguments and `relatum_new`'s
+  `required` list from the schema comparison, and the two new lines from
+  `relatum new -h`.
+
 ## 1.4.0 - 2026-11-11
 
 Fixes from a run on a large Rust workspace.

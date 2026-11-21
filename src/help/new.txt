@@ -9,3 +9,7 @@ options:
   --author AUTHOR
   --tags TAGS        comma-separated
   --body BODY
+  --supersedes OLD   mark OLD superseded by this note in the same write
+  --batch FILE       write the notes in a JSON array (FILE, or - for stdin),
+                     all or none; each has id, kind, summary, body, and
+                     optionally author, tags, supersedes

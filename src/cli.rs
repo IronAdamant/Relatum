@@ -54,12 +54,43 @@ fn dispatch(
             Ok(0)
         }
         Command::New {
+            batch: Some(file),
+            ..
+        } => {
+            let text = if file == "-" {
+                stdin.to_string()
+            } else {
+                std::fs::read_to_string(&file)
+                    .map_err(|error| NoteError::new(format!("--batch {file}: {error}")))?
+            };
+            let value = crate::json::parse(&text)
+                .map_err(|error| NoteError::new(format!("--batch: not JSON ({error})")))?;
+            let crate::json::Value::Array(items) = value else {
+                return Err(NoteError::new("--batch: expected a JSON array of notes"));
+            };
+            let notes = crate::batch::notes_from_json(&items)
+                .map_err(|error| NoteError::new(format!("--batch: {}", error.text)))?;
+            let root = store::find_root()?;
+            let added = ops::add_notes(&root, notes, true)
+                .map_err(|error| NoteError::new(format!("{error} (nothing was written)")))?;
+            for item in added {
+                out.push_str(&item.id);
+                out.push('\n');
+                if let Some(old) = item.superseded {
+                    out.push_str(&format!("{old} -> {}\n", item.id));
+                }
+            }
+            Ok(0)
+        }
+        Command::New {
             id,
             kind,
             summary,
             author,
             tags,
             body,
+            supersedes,
+            batch: None,
         } => {
             let body = match body {
                 Some(body) => body,
@@ -67,6 +98,24 @@ fn dispatch(
                 None => stdin.to_string(),
             };
             let root = store::find_root()?;
+            if let Some(old) = supersedes.filter(|old| !old.is_empty()) {
+                let item = ops::NewNote {
+                    id,
+                    kind,
+                    summary,
+                    body,
+                    author,
+                    tags: tags.map(TagsIn::Csv),
+                    supersedes: Some(old),
+                };
+                for added in ops::add_notes(&root, vec![item], false)? {
+                    out.push_str(&format!("{}\n", added.id));
+                    if let Some(old) = added.superseded {
+                        out.push_str(&format!("{old} -> {}\n", added.id));
+                    }
+                }
+                return Ok(0);
+            }
             let id = ops::add_note(
                 &root,
                 &id,
@@ -88,6 +137,7 @@ fn dispatch(
             limit,
             since,
             details,
+            bodies,
         } => {
             let since = since.as_deref().map(ops::parse_since).transpose()?;
             let root = store::find_root()?;
@@ -99,9 +149,14 @@ fn dispatch(
                 since,
                 limit,
                 details,
+                bodies,
             };
             let listing = ops::list_notes_with(&root, &query)?;
-            out.push_str(&ops::format_ls(&listing.rows));
+            if bodies {
+                out.push_str(&ops::format_ls_bodies(&listing.rows));
+            } else {
+                out.push_str(&ops::format_ls(&listing.rows));
+            }
             out.push_str(&ops::format_more(listing.more));
             Ok(0)
         }
@@ -151,10 +206,11 @@ fn dispatch(
 pub fn main_from_env(args: &[String], prog_name: &str) -> i32 {
     let stdin_is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
     let mut stdin = String::new();
-    let needs_stdin = matches!(
-        cli_parse::parse(args),
-        Parsed::Run(Command::New { body: None, .. })
-    );
+    let needs_stdin = match cli_parse::parse(args) {
+        Parsed::Run(Command::New { batch: Some(file), .. }) => file == "-",
+        Parsed::Run(Command::New { body: None, .. }) => true,
+        _ => false,
+    };
     if needs_stdin && !stdin_is_tty {
         let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin);
     }
