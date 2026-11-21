@@ -42,7 +42,8 @@ CLI and a stdio MCP server over the same files. No service, no account.
   scope.
 - A summary is one line of up to 200 characters; the body holds the rest.
 - Creating a note never overwrites one. To change your mind, write a new
-  note and `supersede` the old ID; `get` on the old ID follows the chain.
+  note and `supersede` the old ID (or pass `--supersedes OLD` to `new`, one
+  step); `get` on the old ID follows the chain.
   For handoffs written as deltas, `relatum_get` with `include_superseded`
   also returns the notes the live one replaced.
 - `ls --since 2026-11-06` lists what was written or changed since local
@@ -50,6 +51,8 @@ CLI and a stdio MCP server over the same files. No service, no account.
   `2026-11-06T09:30+11:00` works too.
 - Every write lands whole, so agents in parallel never read a half-written
   note.
+- `new --batch FILE` writes several notes from a JSON array, all or none.
+  `ls --bodies` prints each note's body too, so one call reads a scope.
 - `check` lints the store.
 
 The store is the nearest `.swarmnotes/` walking up from the working
@@ -112,7 +115,10 @@ env = { SWARMNOTES_DIR = "/absolute/path/to/project/.swarmnotes" }
 
 Tools: `relatum_init`, `relatum_ls`, `relatum_get`, `relatum_new`,
 `relatum_edit`, `relatum_supersede`, `relatum_check`. Results are compact JSON, and errors
-say what to call next. Each tool's description says when it beats grep or
+say what to call next. Each call is a model turn, so the tools save turns:
+`relatum_new` takes `supersedes` (replace a note in one call) and `notes`
+(several notes in one call, all or none), and `relatum_ls` takes
+`include_bodies` (list and read in one call). Each tool's description says when it beats grep or
 asking (handoff notes after a context refresh, api notes between agents).
 To teach agents the protocol, paste
 [AGENTS.snippet.md](AGENTS.snippet.md) into the project's `CLAUDE.md` or
@@ -146,8 +152,9 @@ groups that are on and how to change them. A hidden tool is absent
 from `tools/list`, and calling it anyway returns one line saying which
 variable to change. An unknown name, or trying to disable `core`, stops
 the server at startup with exit code 2 and a one-line message, so the host
-shows it as failed. The `tools/list` response is 6194 bytes with every
-group on and 3179 bytes with `RELATUM_TOOLS=core`. The CLI ignores both
+shows it as failed. The `tools/list` result is 8654 bytes with every
+group on and 5311 bytes with `RELATUM_TOOLS=core` (1.4.0: 7592 and 4301).
+`relatum_new` can supersede with `revise` off. The CLI ignores both
 variables.
 
 ### Choosing groups
@@ -190,9 +197,12 @@ relatum new net/client/timeout-bug --kind finding --author worker-a \
 
 # the parent
 relatum ls net                     # id, kind, summary
+relatum ls net --bodies            # and each body, in one call
 relatum new net/retry-v2 --kind decision --author parent \
-  --summary "Max 6 attempts" --body "Upstream raised its limit."
-relatum supersede net/retry-decision net/retry-v2
+  --summary "Max 6 attempts" --body "Upstream raised its limit." \
+  --supersedes net/retry-decision  # or: relatum supersede OLD NEW
+echo '[{"id": "net/api", "kind": "context", "summary": "Client API",
+        "body": "retry(fn, attempts=6)"}]' | relatum new --batch -
 relatum check
 ```
 

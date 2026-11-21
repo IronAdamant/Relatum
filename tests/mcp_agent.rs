@@ -158,8 +158,8 @@ fn validation_errors_are_one_actionable_line() {
         ],
     );
     let expected = [
-        "missing required arguments kind, summary, body. relatum_new needs id, kind, summary, and body.",
-        "missing required argument body. relatum_new needs id, kind, summary, and body.",
+        "missing required arguments kind, summary, body. relatum_new needs id, kind, summary, and body, or notes.",
+        "missing required argument body. relatum_new needs id, kind, summary, and body, or notes.",
         "summary must be a string, got 5 (number). Call relatum_new again with summary like \"text\".",
         "tags must be a list of strings, got \"net\" (string). Call relatum_new again with tags like [\"net/retry\"].",
         "tags must be a list of strings, got [\"net\",3] (list). Call relatum_new again with tags like [\"net/retry\"].",

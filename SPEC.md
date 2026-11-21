@@ -50,6 +50,15 @@ A note's ID is its path relative to the root, without `.md`:
   file beside the note (its name does not end in `.md`), then hard-link it
   into place for a new note or rename it over the note for `supersede`. A
   concurrent reader sees the old note or the new one, never a partial file.
+- A write of several notes (`new --batch`, `relatum_new` with `notes`), or
+  of a note that supersedes another (`--supersedes`, `supersedes`), is all
+  or none. Every note is checked first: kind, summary, body, tags, id, that
+  the id is free and unique in the call, and that each superseded note
+  exists, is live, and is named once. Then the new notes are created and
+  the old ones marked. If a write still fails, the notes the call created
+  are removed and the old notes are put back byte for byte. Each file is
+  published whole as above; a reader between two of those writes can see a
+  new note before its old note is marked.
 
 ## 3. Note file
 
@@ -139,7 +148,8 @@ than one child, it's worth making it a note.
 - Give each child (or group of children) a scope.
 - Changed your mind? Make a small correction by editing the note in place and
   bumping `updated` (`relatum_edit` over MCP). If the note is being replaced, write a new note and mark
-  the old one `status: superseded` with `superseded_by` (`relatum supersede OLD NEW`).
+  the old one `status: superseded` with `superseded_by` (`relatum supersede OLD NEW`,
+  or `relatum new NEW ... --supersedes OLD` to do both at once).
 - Read children's reports. Fetch the note IDs they cite only when you need the
   details.
 
@@ -201,11 +211,18 @@ date `YYYY-MM-DD`, meaning local midnight (the calendar `updated` uses),
 or a date-time `YYYY-MM-DDTHH:MM[:SS[.frac]]` followed by `Z`, `+HH:MM`,
 `-HH:MM`, or nothing for local time (Relatum 1.3.0 read a bare date as
 UTC midnight);
-`--details` appends `by <author>` and `at <modified>`.
+`--details` appends `by <author>` and `at <modified>`; `--bodies` prints
+each note as `get` does (heading `## <id> (<kind>) - <summary>` with the
+marks and details, then the body), separated by blank lines. A body is cut
+at 4000 characters, and once 40000 characters of bodies are printed the
+rest of the notes show only their heading; a cut or missing body is
+followed by a `[truncated; ...]` line naming the `get` that prints it. The
+caps apply after `--limit`, in listing order.
 The note format has no creation time; `updated` is the date of the last
 edit. `relatum_ls` takes the same `limit`, `since`, and `details`; it
 reports left-out rows as `more` and adds `author`, `updated`, and
-`modified` per note.
+`modified` per note. Its `include_bodies` adds `body` per note under the
+same caps, and `truncated: true` on a note whose body was cut or left out.
 `relatum get` prints the live note at the end of the chain and the path it
 followed. `relatum_get` returns the same note with `chain` (the ids it
 followed); with `include_superseded` each note also carries `superseded`,
@@ -233,7 +250,17 @@ A tool error names the next step: with no store, call `relatum_init` or set
 `SWARMNOTES_DIR`; for a scope with no notes yet, write one with
 `relatum_new`; for an invalid id, the id grammar above; for a
 `relatum_supersede` whose new note does not exist, write it with
-`relatum_new` first. `relatum_new`, `relatum_edit`, and the CLI reject a
+`relatum_new` first. `relatum_new` takes `supersedes` (the id of a live
+note it replaces) and returns `superseded`; or `notes`, a list of objects
+with the same fields (`id`, `kind`, `summary`, `body`, `author`, `tags`,
+`supersedes`) in place of one note's fields, returning `ids` and, when any
+note superseded another, `superseded` (`old`, `new` pairs). Sending both
+is an argument error, as is an item with an unknown field. An error names
+the item (`notes[1]: ...`) and says nothing was written. `relatum new
+--batch FILE` (`-` reads stdin) takes the same JSON array and prints each
+id, and `<old> -> <new>` after a note that superseded another; with
+`--batch`, the id and the other flags are not allowed. `relatum_new`,
+`relatum_edit`, and the CLI reject a
 summary over 200 characters (the input schema's `maxLength`), or one with a
 line break, saying how long it is and what the limit is; they never
 truncate. An argument of the

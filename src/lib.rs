@@ -3,6 +3,7 @@
 //! The on-disk store is still `.swarmnotes/`. Notes written by Examen and
 //! SwarmNotes load unchanged.
 
+pub mod batch;
 pub mod cli;
 pub mod cli_help;
 pub mod cli_parse;

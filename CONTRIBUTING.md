@@ -60,6 +60,7 @@ and the MCP responses, stderr log, and files. It normalises only these:
   line, `invalid arguments: <field> must be <type>, got <value>. Call
   <tool> again with <field> like <example>.` or `invalid arguments:
   missing required argument(s) <fields>. <tool> needs <all required>.`
+  (`relatum_new` ends `..., or notes.`)
   The harness compares these by shape only: an error result whose text is
   pydantic's report on one side and one `invalid arguments:` line on the
   other becomes the same placeholder. `isError`, the tool name, and the
@@ -69,10 +70,15 @@ and the MCP responses, stderr log, and files. It normalises only these:
 - CR and LF are folded on CLI pipes and MCP stderr. On Windows both
   programs write CRLF there, as CPython's text-mode streams do.
 - `relatum_edit` (Relatum only) is dropped from `tools/list`.
-- `relatum_ls`'s opt-in `limit`, `since`, and `details` arguments and
-  `relatum_get`'s `include_superseded` are dropped from the input schemas.
-  `relatum ls -h` lists the matching CLI flags; its usage line, which
-  argparse errors print, is unchanged.
+- `relatum_ls`'s opt-in `limit`, `since`, `details`, and `include_bodies`
+  arguments, `relatum_get`'s `include_superseded`, and `relatum_new`'s
+  `supersedes` and `notes` are dropped from the input schemas. So is
+  `relatum_new`'s `required` list: Relatum has none, because a call sends
+  one note's fields or `notes`. `relatum ls -h` lists the matching CLI
+  flags; its usage line, which argparse errors print, is unchanged. The
+  `--supersedes` and `--batch` lines are dropped from `relatum new -h`; its
+  usage line and argparse errors without `--batch` are unchanged.
+  `tests/turn_reduction.rs` covers these.
 - **Intentional difference: descriptions.** Tool and argument descriptions,
   and the summary's `maxLength`, are dropped from `tools/list` on both
   sides. Relatum writes its own: when to use each tool, and (1.4.0) the
