@@ -5,10 +5,11 @@ use crate::json::{self, Value};
 use crate::mcp_groups::{Groups, Surface};
 use crate::mcp_schema;
 use crate::mcp_support::{
-    InvokeErr, bool_or, check_optional_bool, check_optional_str, optional_int, optional_string, optional_tags, path_is_null,
+    InvokeErr, INVALID, lookup, bool_or, check_optional_bool, check_optional_str, optional_int, optional_string, optional_tags, path_is_null,
     require_present_str, require_str, require_string_list, store_for_init, string_or, type_error,
     validate_ls, Want,
 };
+use crate::batch;
 use crate::ops::{self, TagsIn};
 use crate::prog;
 use crate::pystr::{py_list, py_repr};
@@ -237,6 +238,7 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
         let tag = optional_string(args, "tag").filter(|text| !text.is_empty());
         let include = bool_or(args, "include_superseded", false);
         let details = bool_or(args, "details", false);
+        let bodies = bool_or(args, "include_bodies", false);
         let limit = optional_int(name, args, "limit")?.map(|n| usize::try_from(n).unwrap_or(0));
         let since = optional_string(args, "since")
             .filter(|text| !text.is_empty())
@@ -253,6 +255,7 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
             since,
             limit,
             details,
+            bodies,
         };
         let listing = ops::list_notes_with(&root, &query).map_err(note)?;
         let notes = listing
@@ -276,6 +279,12 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
                         pairs.push(("updated", json::s(&updated)));
                     }
                     pairs.push(("modified", json::s(&details.modified)));
+                }
+                if let Some(body) = row.body {
+                    pairs.push(("body", json::s(&body)));
+                }
+                if row.truncated {
+                    pairs.push(("truncated", json::bool_val(true)));
                 }
                 json::obj(pairs)
             })
@@ -324,14 +333,32 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
         ]));
     }
     if name == prog::tool("new") {
+        if let Some(items) = lookup(args, "notes").filter(|value| !matches!(value, Value::Null)) {
+            return new_batch(name, args, items);
+        }
         let id = require_present_str(name, args, "id")?;
         let kind = require_present_str(name, args, "kind")?;
         let summary = require_present_str(name, args, "summary")?;
         let body = require_present_str(name, args, "body")?;
         check_optional_str(name, args, "author")?;
+        check_optional_str(name, args, "supersedes")?;
         let tags = optional_tags(name, args)?;
         let author = optional_string(args, "author");
+        let supersedes = optional_string(args, "supersedes").filter(|old| !old.is_empty());
         let root = tool_root()?;
+        if let Some(old) = supersedes {
+            let item = ops::NewNote {
+                id: id.clone(),
+                kind,
+                summary,
+                body,
+                author,
+                tags: tags.map(TagsIn::List),
+                supersedes: Some(old.clone()),
+            };
+            ops::add_notes(&root, vec![item], false).map_err(note)?;
+            return Ok(json::obj(vec![("id", json::s(&id)), ("superseded", json::s(&old))]));
+        }
         ops::add_note(
             &root,
             &id,
@@ -396,6 +423,58 @@ fn invoke(name: &str, args: &Value) -> Result<Value, InvokeErr> {
         ]));
     }
     Err(InvokeErr::Note(format!("Unknown tool: {name}")))
+}
+
+/// `relatum_new` with `notes`: every note is checked, then all are written,
+/// or none are.
+fn new_batch(name: &str, args: &Value, items: &Value) -> Result<Value, InvokeErr> {
+    let Value::Array(items) = items else {
+        return Err(type_error(name, "notes", Want::NoteList, items));
+    };
+    if let Some(key) = batch::FIELDS
+        .iter()
+        .find(|key| lookup(args, key).is_some_and(|value| !matches!(value, Value::Null)))
+    {
+        return Err(InvokeErr::Validation {
+            fields: vec![(*key).to_string()],
+            text: format!(
+                "{INVALID}{key} is set beside notes. Put every note, with its {key}, in notes, \
+                 or leave notes out to write one note."
+            ),
+        });
+    }
+    if items.is_empty() {
+        return Err(InvokeErr::Note(format!(
+            "notes is empty. Pass at least one note, or call {name} with id, kind, summary, and body."
+        )));
+    }
+    let notes = batch::notes_from_json(items).map_err(|err| InvokeErr::Validation {
+        fields: vec![err.field.clone()],
+        text: match err.example {
+            Some(example) => format!(
+                "{INVALID}{}. Call {name} again with {} like {example}.",
+                err.text, err.field
+            ),
+            None => format!("{INVALID}{}. Nothing was written.", err.text),
+        },
+    })?;
+    let root = tool_root()?;
+    let added = ops::add_notes(&root, notes, true)
+        .map_err(|err| InvokeErr::Note(format!("{} Nothing was written.", agent_message(err))))?;
+    let ids = added.iter().map(|item| json::s(&item.id)).collect();
+    let superseded: Vec<Value> = added
+        .iter()
+        .filter_map(|item| {
+            item.superseded
+                .as_ref()
+                .map(|old| json::obj(vec![("old", json::s(old)), ("new", json::s(&item.id))]))
+        })
+        .collect();
+    let mut result = vec![("ids", json::arr(ids))];
+    if !superseded.is_empty() {
+        result.push(("superseded", json::arr(superseded)));
+    }
+    Ok(json::obj(result))
 }
 
 fn fetched(requested: &str, resolved: &ops::Resolved) -> Value {
@@ -491,6 +570,14 @@ fn check_scope(root: &Path, scope: &str) -> Result<(), InvokeErr> {
 /// Error text for a tool result. An invalid id also says what a valid one
 /// looks like.
 fn agent_message(err: NoteError) -> String {
+    // A batch error names its item first; explain the rest as usual.
+    if let Some((head, rest)) = err.message.split_once("]: ") {
+        if head.starts_with("notes[") && head[6..].bytes().all(|b| b.is_ascii_digit()) {
+            let inner = agent_message(NoteError::new(rest));
+            let end = if inner.ends_with('.') { "" } else { "." };
+            return format!("{head}]: {inner}{end}");
+        }
+    }
     let (edit, supersede) = (prog::tool("edit"), prog::tool("supersede"));
     if let Some(rest) = err.message.strip_prefix("note already exists: ") {
         let id = rest.trim_end_matches(" (pick another id)");

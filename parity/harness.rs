@@ -535,6 +535,23 @@ fn cli_suite(oracle: &Oracle, binary: &Path, diffs: &mut Diffs) {
     }
 }
 
+/// `relatum new -h` lists `--supersedes` and `--batch` after the options
+/// Examen has; drop those lines (each option and its wrapped help) so the
+/// rest is still compared byte for byte.
+fn drop_new_options(help: &str) -> String {
+    let mut out = String::new();
+    let mut dropping = false;
+    for line in help.split_inclusive('\n') {
+        if line.starts_with("  --") {
+            dropping = line.starts_with("  --supersedes ") || line.starts_with("  --batch ");
+        }
+        if !dropping {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// One CLI scenario. Returns true when a diff ends the suite.
 fn cli_scenario(
     oracle: &Oracle,
@@ -552,7 +569,10 @@ fn cli_scenario(
             std::iter::once(*command).chain(args.iter().copied()).map(String::from).collect()
         };
         let py = oracle.call(&argv, py_dir, &[], stdin);
-        let rs = rust_call(binary, &argv, rs_dir, &[], stdin);
+        let mut rs = rust_call(binary, &argv, rs_dir, &[], stdin);
+        if argv == ["new", "-h"] {
+            rs.1 = drop_new_options(&rs.1);
+        }
         let label = format!("cli[{index}] {}", py_list(&argv));
         if py != rs {
             diffs.add(&label, &call_repr(&py), &call_repr(&rs));
@@ -901,8 +921,10 @@ fn arg(json_text: &str) -> Value {
 
 /// Relatum's intentional MCP output changes, folded on both sides:
 /// relatum_edit is dropped from tools/list; Relatum's opt-in arguments
-/// (relatum_ls's limit, since, and details, relatum_get's
-/// include_superseded) are dropped from the input schemas; tool and argument
+/// (relatum_ls's limit, since, details, and include_bodies, relatum_get's
+/// include_superseded, relatum_new's supersedes and notes) are dropped from
+/// the input schemas, and so is relatum_new's required list, which Relatum
+/// leaves out because a call sends either one note's fields or notes; tool and argument
 /// descriptions and `maxLength` are dropped, because Relatum writes its own
 /// (1.4.0: when to use each tool, and the 200-character summary limit);
 /// argument validation errors are compared by shape (see fold_validation);
@@ -925,6 +947,11 @@ fn fold_intentional(responses: &mut [Value]) {
                 };
                 if let Value::Object(pairs) = tool {
                     pairs.retain(|(key, _)| key != "description");
+                }
+                if name.ends_with("_new") {
+                    if let Some(Value::Object(schema)) = member(tool, "inputSchema") {
+                        schema.retain(|(key, _)| key != "required");
+                    }
                 }
                 let properties = member(tool, "inputSchema").and_then(|schema| member(schema, "properties"));
                 if let Some(Value::Object(pairs)) = properties {
@@ -979,11 +1006,14 @@ fn fold_validation(text: &str) -> Option<String> {
 }
 
 /// Opt-in arguments Examen does not have, as (tool suffix, argument).
-const RELATUM_ARGS: [(&str, &str); 4] = [
+const RELATUM_ARGS: [(&str, &str); 7] = [
     ("_ls", "limit"),
     ("_ls", "since"),
     ("_ls", "details"),
+    ("_ls", "include_bodies"),
     ("_get", "include_superseded"),
+    ("_new", "supersedes"),
+    ("_new", "notes"),
 ];
 
 fn member<'a>(value: &'a mut Value, key: &str) -> Option<&'a mut Value> {

@@ -204,6 +204,18 @@ pub fn write_note_file(path: &Path, text: &str) -> std::io::Result<()> {
     result
 }
 
+/// `write_note_file` for bytes as they were read, to put a note back
+/// exactly when a multi-note write is rolled back.
+pub fn write_note_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = temp_beside(path);
+    fs::write(&tmp, bytes)?;
+    let result = rename_over(&tmp, path);
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Create a note only if `path` does not exist, publishing the whole file at
 /// once. A hard link from a complete temp file is an atomic exclusive create.
 /// Where hard links are unsupported, fall back to create_new and write.

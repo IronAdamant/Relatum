@@ -39,15 +39,15 @@ pub fn when_to_use() -> String {
     format!(
         "\
 Reach for notes before grep or asking another agent. After a context
-refresh, {ls} your scope and {get} your handoff note. Before
-you stop, write one ({new}, or {supersede} the last). Put what
-other agents call in an api note (e.g. <scope>/api); read theirs the same
-way.
+refresh, {ls} your scope with include_bodies, or {get} your
+handoff note. Before you stop, write one ({new}; supersedes
+replaces the last). Put what other agents call in an api note (e.g.
+<scope>/api); read theirs the same way. One {new} call with notes
+writes several notes.
 ",
         ls = prog::tool("ls"),
         get = prog::tool("get"),
         new = prog::tool("new"),
-        supersede = prog::tool("supersede"),
     )
 }
 
@@ -64,6 +64,7 @@ pub fn tools() -> Value {
         "\
 Mark old as replaced by new, e.g. a fresh handoff or api note replacing the\n\
 last one. Write new with {new} first; it must exist and resolve to a live note.\n\
+{new} with supersedes does both in one call.\n\
 \n\
 Later {get} calls on old follow the chain (include_superseded also returns\n\
 old's body). {ls} hides old unless include_superseded is true.\n",
@@ -78,17 +79,17 @@ and reports cite its id instead of pasting it: a handoff before your context\n\
 runs out or your work ends (state, open items, gotchas), an api note when\n\
 other agents will call your code, a finding or attempt from your work.\n\
 \n\
-Fails if the id already exists; never overwrites. To replace a note, write\n\
-the new one, then call {supersede}. kind is decision, constraint,\n\
-convention, context, format, finding, or attempt. summary is one line, at\n\
-most {max} characters. body is the fact (keep it under ~300 words). tags is\n\
-a list of slugs.\n",
-        supersede = prog::tool("supersede"),
+Fails if the id already exists; never overwrites. To replace a note, set\n\
+supersedes to its id: the old note is marked superseded in the same call.\n\
+kind is decision, constraint, convention, context, format, finding, or\n\
+attempt. summary is one line, at most {max} characters. body is the fact\n\
+(keep it under ~300 words). tags is a list of slugs. notes writes several\n\
+notes in one call.\n",
         max = SUMMARY_MAX,
     );
     json::arr(vec![
         tool("init", INIT, init_schema(), false),
-        tool("ls", LS, ls_schema(), false),
+        tool("ls", &ls_description(), ls_schema(), false),
         tool("get", GET, get_schema(), true),
         tool("new", &new, new_schema(), true),
         tool("edit", &edit_description(), edit_schema(), true),
@@ -211,6 +212,19 @@ fn ls_schema() -> Value {
                     "Also return author, updated, and modified (file time, UTC) per note.",
                 ),
             ),
+            (
+                "include_bodies",
+                described(
+                    bool_prop("Include Bodies"),
+                    &format!(
+                        "Also return each body, cut at {one} characters ({all} in all); truncated: true \
+                         marks a cut, and {get} returns the whole note.",
+                        get = prog::tool("get"),
+                        one = crate::ops::LS_BODY_MAX,
+                        all = crate::ops::LS_BODIES_TOTAL,
+                    ),
+                ),
+            ),
         ]),
         &[],
     )
@@ -277,43 +291,102 @@ fn summary_prop(property: Value, description: &str) -> Value {
 }
 
 fn new_schema() -> Value {
-    schema(
-        &prog::tool("new"),
-        json::obj(vec![
-            ("id", str_prop("Id", None)),
-            ("kind", str_prop("Kind", None)),
-            (
-                "summary",
-                summary_prop(
-                    str_prop("Summary", None),
-                    &format!("One line, at most {SUMMARY_MAX} characters; shown in listings."),
+    let mut properties = note_properties();
+    properties.push((
+        "supersedes",
+        described(
+            optional_str("Supersedes"),
+            "Id of a live note this one replaces; it is marked superseded in the same call.",
+        ),
+    ));
+    properties.push((
+        "notes",
+        described(
+            json::obj(vec![
+                (
+                    "anyOf",
+                    json::arr(vec![
+                        json::obj(vec![("items", note_item()), ("type", json::s("array"))]),
+                        json::obj(vec![("type", json::s("null"))]),
+                    ]),
                 ),
+                ("default", Value::Null),
+                ("title", json::s("Notes")),
+            ]),
+            "Several notes, each with the fields above, instead of one. All are checked first; \
+             one bad note writes none.",
+        ),
+    ));
+    // No required list: a call sends one note's fields or notes.
+    schema(&prog::tool("new"), json::obj(properties), &[])
+}
+
+/// The top-level fields of one note.
+fn note_properties() -> Vec<(&'static str, Value)> {
+    vec![
+        ("id", str_prop("Id", None)),
+        ("kind", str_prop("Kind", None)),
+        (
+            "summary",
+            summary_prop(
+                str_prop("Summary", None),
+                &format!("One line, at most {SUMMARY_MAX} characters; shown in listings."),
             ),
-            ("body", str_prop("Body", None)),
-            ("author", optional_str("Author")),
-            (
-                "tags",
-                json::obj(vec![
-                    (
-                        "anyOf",
-                        json::arr(vec![
-                            json::obj(vec![
-                                (
-                                    "items",
-                                    json::obj(vec![("type", json::s("string"))]),
-                                ),
-                                ("type", json::s("array")),
-                            ]),
-                            json::obj(vec![("type", json::s("null"))]),
+        ),
+        ("body", str_prop("Body", None)),
+        ("author", optional_str("Author")),
+        (
+            "tags",
+            json::obj(vec![
+                (
+                    "anyOf",
+                    json::arr(vec![
+                        json::obj(vec![
+                            ("items", json::obj(vec![("type", json::s("string"))])),
+                            ("type", json::s("array")),
                         ]),
-                    ),
-                    ("default", Value::Null),
-                    ("title", json::s("Tags")),
-                ]),
-            ),
-        ]),
-        &["id", "kind", "summary", "body"],
-    )
+                        json::obj(vec![("type", json::s("null"))]),
+                    ]),
+                ),
+                ("default", Value::Null),
+                ("title", json::s("Tags")),
+            ]),
+        ),
+    ]
+}
+
+/// One item of notes, kept short: the descriptions are on the top-level
+/// fields it repeats.
+fn note_item() -> Value {
+    let string = || json::obj(vec![("type", json::s("string"))]);
+    json::obj(vec![
+        (
+            "properties",
+            json::obj(vec![
+                ("id", string()),
+                ("kind", string()),
+                (
+                    "summary",
+                    json::obj(vec![
+                        ("maxLength", Value::Number(SUMMARY_MAX.to_string())),
+                        ("type", json::s("string")),
+                    ]),
+                ),
+                ("body", string()),
+                ("author", string()),
+                (
+                    "tags",
+                    json::obj(vec![("items", string()), ("type", json::s("array"))]),
+                ),
+                ("supersedes", string()),
+            ]),
+        ),
+        (
+            "required",
+            json::arr(["id", "kind", "summary", "body"].map(json::s).to_vec()),
+        ),
+        ("type", json::s("object")),
+    ])
 }
 
 fn edit_description() -> String {
@@ -389,7 +462,9 @@ SWARMNOTES_DIR, or the project directory whose .swarmnotes is\n\
 SWARMNOTES_DIR. Any other path is an error. Returns root (the store path)\n\
 and report_format (its note id).\n";
 
-const LS: &str = "\
+fn ls_description() -> String {
+    format!(
+        "\
 List notes as id, kind, summary, and status. Use it before grep or asking:\n\
 after a context refresh, list your scope to find your handoff note; before\n\
 using another agent's code, list its scope for an api note.\n\
@@ -397,7 +472,11 @@ using another agent's code, list its scope for an api note.\n\
 scope is a directory under the store (e.g. m5/editor); empty lists everything. kind filters\n\
 to one of decision, constraint, convention, context, format, finding,\n\
 attempt. Superseded notes are omitted unless include_superseded is true.\n\
-tag filters to one slug. The store is .swarmnotes/ or $SWARMNOTES_DIR.\n";
+tag filters to one slug. include_bodies saves a {get} call per note. The\n\
+store is .swarmnotes/ or $SWARMNOTES_DIR.\n",
+        get = prog::tool("get"),
+    )
+}
 
 const GET: &str = "\
 Fetch one or more notes by ID: the notes a brief lists under Read first,\n\

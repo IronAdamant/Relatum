@@ -17,7 +17,19 @@ pub struct Row {
     pub superseded_by: Option<String>,
     /// Filled only when `LsQuery::details` is set.
     pub details: Option<Details>,
+    /// Filled only when `LsQuery::bodies` is set: the body, cut to fit the
+    /// caps below, or `None` once the total cap is spent.
+    pub body: Option<String>,
+    /// The body was cut or left out; `get` returns it whole.
+    pub truncated: bool,
 }
+
+/// `ls` with bodies returns at most this many characters of one body. The
+/// lint budget is 300 words, about 2000 characters.
+pub const LS_BODY_MAX: usize = 4000;
+/// ... and at most this many characters of bodies in all. Notes past it are
+/// listed without a body.
+pub const LS_BODIES_TOTAL: usize = 40000;
 
 /// Who wrote a note and when, for `ls` with details.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +54,9 @@ pub struct LsQuery {
     /// At most this many rows; the rest are counted in `Listing::more`.
     pub limit: Option<usize>,
     pub details: bool,
+    /// Also return each listed note's body, within `LS_BODY_MAX` and
+    /// `LS_BODIES_TOTAL`.
+    pub bodies: bool,
 }
 
 pub struct Listing {
@@ -131,6 +146,19 @@ pub fn add_note(
     author: Option<&str>,
     tags: Option<TagsIn>,
 ) -> NoteResult<String> {
+    let note = prepare_note(kind, summary, body, author, tags)?;
+    store::create(root, note_id, &note)?;
+    Ok(note_id.to_string())
+}
+
+/// The checks `new` makes before it writes, in the order it makes them.
+fn prepare_note(
+    kind: &str,
+    summary: &str,
+    body: &str,
+    author: Option<&str>,
+    tags: Option<TagsIn>,
+) -> NoteResult<Note> {
     if !KINDS.contains(&kind) {
         return Err(NoteError::new(format!(
             "kind must be one of: {}",
@@ -158,12 +186,175 @@ pub fn add_note(
     if !parsed.is_empty() {
         fields.push(("tags".into(), MetaVal::List(parsed)));
     }
-    let note = Note {
+    Ok(Note {
         fields,
         body: body.to_string(),
+    })
+}
+
+/// One note for `add_notes`: the fields of `new`, plus the live note it
+/// replaces, if any.
+pub struct NewNote {
+    pub id: String,
+    pub kind: String,
+    pub summary: String,
+    pub body: String,
+    pub author: Option<String>,
+    pub tags: Option<TagsIn>,
+    pub supersedes: Option<String>,
+}
+
+/// What `add_notes` wrote: each new id, and the old id it superseded.
+pub struct Added {
+    pub id: String,
+    pub superseded: Option<String>,
+}
+
+/// A note `add_notes` will write, checked.
+struct Planned {
+    id: String,
+    path: std::path::PathBuf,
+    note: Note,
+    /// The note it supersedes: id, path, the file's bytes as they were,
+    /// and the rewritten text.
+    old: Option<(String, std::path::PathBuf, Vec<u8>, String)>,
+}
+
+/// Write one or more notes, each optionally superseding a live note, all or
+/// nothing. Every note is checked before any file is written; if a write
+/// still fails (a race, a full disk), the notes this call created are
+/// removed and the notes it marked superseded are put back. With `batch`,
+/// an error names the failing item as `notes[i]: `.
+pub fn add_notes(root: &Path, notes: Vec<NewNote>, batch: bool) -> NoteResult<Vec<Added>> {
+    if notes.is_empty() {
+        return Err(NoteError::new("notes is empty; pass at least one note"));
+    }
+    let at = |index: usize, err: NoteError| {
+        if batch {
+            NoteError::new(format!("notes[{index}]: {}", err.message))
+        } else {
+            err
+        }
     };
-    store::create(root, note_id, &note)?;
-    Ok(note_id.to_string())
+    let mut plan: Vec<Planned> = Vec::new();
+    for (index, item) in notes.into_iter().enumerate() {
+        let note = prepare_note(&item.kind, &item.summary, &item.body, item.author.as_deref(), item.tags)
+            .map_err(|err| at(index, err))?;
+        let path = store::note_path(root, &item.id).map_err(|err| at(index, err))?;
+        if plan.iter().any(|done| done.id == item.id) {
+            return Err(at(index, NoteError::new(format!("{} appears twice in this call", item.id))));
+        }
+        if path.exists() {
+            return Err(at(
+                index,
+                NoteError::new(format!("note already exists: {} (pick another id)", item.id)),
+            ));
+        }
+        let old = match item.supersedes.filter(|old| !old.is_empty()) {
+            None => None,
+            Some(old) => {
+                Some(plan_supersede(root, &old, &item.id, &plan).map_err(|err| at(index, err))?)
+            }
+        };
+        plan.push(Planned {
+            id: item.id,
+            path,
+            note,
+            old,
+        });
+    }
+    let mut created: Vec<&Path> = Vec::new();
+    let mut new_dirs: Vec<std::path::PathBuf> = Vec::new();
+    for (index, item) in plan.iter().enumerate() {
+        missing_dirs(root, &item.path, &mut new_dirs);
+        if let Err(err) = store::create(root, &item.id, &item.note) {
+            undo(&created, &[], &new_dirs);
+            return Err(at(index, err));
+        }
+        created.push(&item.path);
+    }
+    let mut marked: Vec<(&Path, &[u8])> = Vec::new();
+    for (index, item) in plan.iter().enumerate() {
+        let Some((old_id, old_path, before, after)) = &item.old else { continue };
+        if let Err(err) = meta::write_note_file(old_path, after) {
+            undo(&created, &marked, &new_dirs);
+            return Err(at(index, NoteError::new(format!("could not supersede {old_id}: {err}"))));
+        }
+        marked.push((old_path, before));
+    }
+    Ok(plan
+        .into_iter()
+        .map(|item| Added {
+            id: item.id,
+            superseded: item.old.map(|(old, ..)| old),
+        })
+        .collect())
+}
+
+/// Check that `old` can be superseded by the note `new` about to be
+/// written, and render the old note as it will be.
+fn plan_supersede(
+    root: &Path,
+    old: &str,
+    new: &str,
+    plan: &[Planned],
+) -> NoteResult<(String, std::path::PathBuf, Vec<u8>, String)> {
+    let fail = |message: String| NoteError::new(format!("supersedes: {message}"));
+    if old == new {
+        return Err(fail("a note cannot supersede itself".to_string()));
+    }
+    let path = store::note_path(root, old).map_err(|err| fail(err.message))?;
+    if !path.is_file() {
+        return Err(fail(format!("no such note: {old}")));
+    }
+    if plan.iter().any(|item| item.old.as_ref().is_some_and(|(seen, ..)| seen == old)) {
+        return Err(fail(format!("{old} is superseded by another note in this call")));
+    }
+    let before = std::fs::read(&path).map_err(|err| fail(err.to_string()))?;
+    let mut note = meta::parse(&meta::read_note_text(&path).map_err(|err| fail(err.message))?);
+    if note.get_str("status") == Some("superseded") {
+        let next = note.get_str("superseded_by").unwrap_or("?");
+        return Err(fail(format!(
+            "{old} is already superseded by {next}; supersede the live note instead"
+        )));
+    }
+    note.set("status", MetaVal::Str("superseded".into()));
+    note.set("superseded_by", MetaVal::Str(new.to_string()));
+    note.set("updated", MetaVal::Str(clock::today()));
+    Ok((old.to_string(), path, before, meta::render(&note)))
+}
+
+/// Directories between `root` and `path` that do not exist yet, outermost
+/// first, so a rolled-back call leaves no empty scope behind.
+fn missing_dirs(root: &Path, path: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let mut dirs = Vec::new();
+    let mut cursor = path.parent();
+    while let Some(dir) = cursor {
+        if dir == root || dir.is_dir() {
+            break;
+        }
+        dirs.push(dir.to_path_buf());
+        cursor = dir.parent();
+    }
+    for dir in dirs.into_iter().rev() {
+        if !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+}
+
+/// Roll back a failed `add_notes`: restore the old notes, remove the new
+/// ones, then the directories created for them (only while empty).
+fn undo(created: &[&Path], marked: &[(&Path, &[u8])], new_dirs: &[std::path::PathBuf]) {
+    for (path, before) in marked.iter().rev() {
+        let _ = meta::write_note_bytes(path, before);
+    }
+    for path in created.iter().rev() {
+        let _ = std::fs::remove_file(path);
+    }
+    for dir in new_dirs.iter().rev() {
+        let _ = std::fs::remove_dir(dir);
+    }
 }
 
 pub fn list_notes(
@@ -249,6 +440,8 @@ pub fn list_notes_with(root: &Path, query: &LsQuery) -> NoteResult<Listing> {
             status,
             superseded_by,
             details,
+            body: query.bodies.then(|| note.body.trim_end_matches('\n').to_string()),
+            truncated: false,
         });
     }
     let mut more = 0;
@@ -256,7 +449,33 @@ pub fn list_notes_with(root: &Path, query: &LsQuery) -> NoteResult<Listing> {
         more = rows.len().saturating_sub(limit);
         rows.truncate(limit);
     }
+    if query.bodies {
+        cap_bodies(&mut rows);
+    }
     Ok(Listing { rows, more })
+}
+
+/// Cut each body to `LS_BODY_MAX` characters, then drop bodies once
+/// `LS_BODIES_TOTAL` characters have been returned, in listing order.
+fn cap_bodies(rows: &mut [Row]) {
+    let mut left = LS_BODIES_TOTAL;
+    for row in rows {
+        let Some(body) = row.body.take() else { continue };
+        let len = body.chars().count();
+        let room = LS_BODY_MAX.min(left);
+        if room == 0 {
+            row.truncated = true;
+            continue;
+        }
+        if len > room {
+            row.body = Some(body.chars().take(room).collect());
+            row.truncated = true;
+            left -= room;
+        } else {
+            row.body = Some(body);
+            left -= len;
+        }
+    }
 }
 
 pub struct Resolved {
@@ -614,6 +833,42 @@ pub fn format_ls(rows: &[Row]) -> String {
             out.push_str(&format!("  at {}", details.modified));
         }
         out.push('\n');
+    }
+    out
+}
+
+/// `ls --bodies`: each note as `get` prints it, with the `ls` marks and
+/// details on the heading line, separated by blank lines.
+pub fn format_ls_bodies(rows: &[Row]) -> String {
+    let mut out = String::new();
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("## {} ({}) \u{2014} {}", row.id, row.kind, row.summary));
+        if row.status == "superseded" {
+            out.push_str(&format!(" [-> {}]", row.superseded_by.as_deref().unwrap_or("?")));
+        } else if row.status == "draft" {
+            out.push_str(" [draft]");
+        }
+        if let Some(details) = &row.details {
+            if let Some(author) = &details.author {
+                out.push_str(&format!("  by {author}"));
+            }
+            out.push_str(&format!("  at {}", details.modified));
+        }
+        out.push('\n');
+        if let Some(body) = &row.body {
+            out.push_str(body);
+            out.push('\n');
+        }
+        if row.truncated {
+            out.push_str(&format!(
+                "[truncated; `{} get {}` prints the whole note]\n",
+                crate::prog::current_prog(),
+                row.id
+            ));
+        }
     }
     out
 }
